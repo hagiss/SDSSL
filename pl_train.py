@@ -58,7 +58,7 @@ class PLLearner(pl.LightningModule):
         self.student = NetWrapper(student, embed_dim, args, True)
         self.teacher = NetWrapper(teacher, embed_dim, args)
 
-        self.teacher.projector.load_state_dict(self.student.projector.state_dict())
+        self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
 
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -133,16 +133,16 @@ class PLLearner(pl.LightningModule):
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
-        # student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-        # student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-        # teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-        # teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-        # loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
-        # loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
-        # loss = loss_output + self.ratio * loss_mid
+        student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+        student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+        teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+        teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+        loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
+        loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
+        loss = loss_output + self.ratio * loss_mid
 
-        loss = loss_fn(student_output1, teacher_output1).mean()
-        loss += loss_fn(student_output2, teacher_output2).mean()
+        # loss = loss_fn(student_output1, teacher_output1).mean()
+        # loss += loss_fn(student_output2, teacher_output2).mean()
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -160,7 +160,7 @@ class PLLearner(pl.LightningModule):
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
-        for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
+        for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
 
