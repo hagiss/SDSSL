@@ -192,8 +192,8 @@ class PLLearner(pl.LightningModule):
         dist.all_gather(gather_t, train_labels)
         train_labels = torch.cat(gather_t).to(self.device)
 
-        k = 5
-        num_classes = 10
+        k = 20
+        num_classes = 1000
         retrieval_one_hot = torch.zeros(k, num_classes).to(self.device)
         top1, top5, total = 0.0, 0.0, 0
         # print("train_features", train_features)

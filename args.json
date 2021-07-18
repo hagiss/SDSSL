@@ -17,9 +17,9 @@
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
   "dataset": "imagenet",
-  "name": "vit_base_100e_imgnet",
+  "name": "vit_base_l2o_100e_imgnet",
   "accumulate": 8,
-  "val_interval": 1,
+  "val_interval": 3,
   "div": 1,
   "ratio": 11
 }
