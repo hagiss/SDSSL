@@ -4,6 +4,7 @@ import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, Dataset
 import argparse
 import torch.nn.functional as F
+from einops import repeat
 
 from torchvision import transforms as T
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -52,13 +53,18 @@ class PLLearner(pl.LightningModule):
         super().__init__()
         # self.save_hyperparameters()
         self.ratio = args.ratio
+        self.st_inter = args.st_inter
+        self.t_inter = args.t_inter
 
         teacher.load_state_dict(student.state_dict())
 
-        self.student = NetWrapper(student, embed_dim, args, True)
-        self.teacher = NetWrapper(teacher, embed_dim, args)
+        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter)
+        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter)
 
-        self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
+        if self.st_inter != self.t_inter:
+            self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
+        else:
+            self.teacher.projector.load_state_dict(self.student.projector.state_dict())
 
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -79,6 +85,7 @@ class PLLearner(pl.LightningModule):
         self.lr_schedule = utils.cosine_scheduler(
             args.lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
             args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
+            # args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
         )
@@ -133,16 +140,23 @@ class PLLearner(pl.LightningModule):
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
-        student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-        student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-        teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-        teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-        loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
-        loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
-        loss = loss_output + self.ratio * loss_mid
+        if self.st_inter != self.t_inter:
+            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
-        # loss = loss_fn(student_output1, teacher_output1).mean()
-        # loss += loss_fn(student_output2, teacher_output2).mean()
+        if self.ratio > 0:
+            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+            loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
+            loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
+            loss = loss_output + self.ratio * loss_mid
+        else:
+            loss = loss_fn(student_output1, teacher_output1).mean()
+            loss += loss_fn(student_output2, teacher_output2).mean()
+            if self.st_inter:
+                loss *= 12
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -160,15 +174,21 @@ class PLLearner(pl.LightningModule):
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
-        for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = old_weight * m + (1 - m) * up_weight
+
+        if self.st_inter != self.t_inter:
+            for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
+        else:
+            for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         x, label = batch
 
-        features = self.student.get_representation(x).cpu()
+        features = self.student.get_representation(x).detach().cpu()
         return {'features': features, 'labels': label}
 
     @torch.no_grad()
@@ -270,15 +290,19 @@ if __name__ == '__main__':
                         help='Load settings from file in json format. Command line options override values in file.')
 
     parser.add_argument('--lr', '-l', default=1e-5, type=float, help='learning rate')
-    parser.add_argument('--epochs', '-e', type=int, default=300, help="epoch")
+    parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
+    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=1, type=int, help='loss ratio of layer2output')
+    parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
+    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
+    parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
 
-    parser.add_argument('--data', '-d', metavar='DIR', default='../data',
+    parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
     parser.add_argument('--dataset', '-ds', default='stl10',
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
@@ -322,12 +346,17 @@ if __name__ == '__main__':
     #     starting with the default value of 0.04 and increase this slightly if needed.""")
     # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
     #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
+    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
+    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
+    #     Not normalizing leads to better performance but can make the training unstable.
+    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
-                        choices=['vit_tiny', 'vit_small', 'vit_base', 'deit_tiny', 'deit_small'] + torchvision_archs,
+                        choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small'] \
+                                + torchvision_archs + torch.hub.list("facebookresearch/xcit"),
                         help="""Name of architecture to train. For quick experiments with ViTs,
-        we recommend using vit_tiny or vit_small.""")
+            we recommend using vit_tiny or vit_small.""")
     parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
         of input square patches - default 16 (for 16x16 patches). Using smaller
         values leads to better performance but requires more memory. Applies only
@@ -336,10 +365,6 @@ if __name__ == '__main__':
     parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of
         the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--div', default=4, type=int, help="dividing hidden dimensions of mlp1")
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA
         parameter for teacher update. The value is increased to 1 during training with cosine schedule.
         We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
@@ -444,11 +469,16 @@ if __name__ == '__main__':
 
     learner = PLLearner(student, teacher, len(data_loader), val_loader, embed_dim, args)
 
-    logger = pl.loggers.TensorBoardLogger(args.board_path, name='byol/' + args.name)
+    lr = args.lr * 10000
+    min_lr = args.min_lr * 10000
+    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
+    clip = args.clip_grad
+
+    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "/{}_{}_{}_{}".format(lr, min_lr, total_batch, clip))
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
-        max_epochs=args.epochs,
+        max_epochs=args.max_epochs,
         default_root_dir="output/vit.model",
         accelerator='ddp',
         logger=logger,
