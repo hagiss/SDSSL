@@ -84,8 +84,8 @@ class PLLearner(pl.LightningModule):
         # ============ init schedulers ... ============
         self.lr_schedule = utils.cosine_scheduler(
             args.lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
-            args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
-            # args.min_lr,
+            # args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
+            args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
         )

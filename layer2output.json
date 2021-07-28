@@ -18,12 +18,12 @@
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
   "dataset": "imagenet",
-  "name": "byol/vit_base_16",
+  "name": "byol/vit_base_16_l2o",
   "accumulate": 1,
   "val_interval": 4,
   "div": 1,
   "ratio": 0,
   "up": 0,
-  "st_inter": false,
+  "st_inter": true,
   "t_inter": false
 }
