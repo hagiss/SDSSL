@@ -473,7 +473,7 @@ if __name__ == '__main__':
     total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
     clip = args.clip_grad
 
-    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "/{}_{}_{}_{}_{}".format(lr, min_lr, total_batch, clip, args.weight_decay))
+    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
