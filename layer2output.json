@@ -25,5 +25,6 @@
   "ratio": 0,
   "up": 0,
   "st_inter": true,
-  "t_inter": false
+  "t_inter": false,
+  "multi_node": 1
 }
