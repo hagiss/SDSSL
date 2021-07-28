@@ -114,7 +114,7 @@ class PLLearner(pl.LightningModule):
                 T.GaussianBlur((3, 3), (1.0, 2.0)),
                 p=0.2
             ),
-            T.RandomResizedCrop((image_size, image_size)),
+            T.RandomResizedCrop((args.image_size, args.image_size)),
             T.Normalize(
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
@@ -283,7 +283,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            and callable(torchvision_models.__dict__[name]))
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description='byol')
 
     parser.add_argument('--load_json',
@@ -309,6 +309,7 @@ if __name__ == '__main__':
     parser.add_argument('--name', help='name for tensorboard')
     parser.add_argument('--val_interval', default=1, type=int, help='validation epoch interval')
     parser.add_argument('--multi_node', default=1, type=int, help='number of multi-node')
+    parser.add_argument('--accelerator', default='ddp', type=str, help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
     # # Multi-crop parameters
     # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
@@ -467,6 +468,7 @@ if __name__ == '__main__':
     # student = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
     # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
 
+    args.image_size = image_size
     learner = PLLearner(student, teacher, len(data_loader), val_loader, embed_dim, args)
 
     lr = args.lr * 10000
@@ -480,15 +482,19 @@ if __name__ == '__main__':
         gpus=torch.cuda.device_count(),
         max_epochs=args.max_epochs,
         default_root_dir="output/vit.model",
-        accelerator='ddp',
+        accelerator=args.accelerator,
         logger=logger,
         num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
-        nb_gpu_nodes=args.multi_node,
+        num_nodes=args.multi_node,
         callbacks=[lr_monitor]
     )
 
     trainer.fit(learner, data_loader, train_loader)
+
+
+if __name__ == '__main__':
+    main()
