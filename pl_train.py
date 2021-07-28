@@ -308,6 +308,7 @@ if __name__ == '__main__':
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
     parser.add_argument('--name', help='name for tensorboard')
     parser.add_argument('--val_interval', default=1, type=int, help='validation epoch interval')
+    parser.add_argument('--multi_node', default=1, type=int, help='number of multi-node')
 
     # # Multi-crop parameters
     # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
@@ -486,6 +487,7 @@ if __name__ == '__main__':
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
+        nb_gpu_nodes=args.multi_node,
         callbacks=[lr_monitor]
     )
 
