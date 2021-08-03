@@ -85,8 +85,8 @@ class PLLearner(pl.LightningModule):
         self.lr_schedule = utils.cosine_scheduler(
             # args.lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
             args.lr * args.total_batch / 256.,
-            # args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
-            args.min_lr,
+            args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
+            # args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
         )
@@ -363,8 +363,8 @@ def main(args):
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
-        student = torchvision_models.__dict__[args.arch]()
-        teacher = torchvision_models.__dict__[args.arch]()
+        student = torchvision_models.__dict__[args.arch](args.dis_token)
+        teacher = torchvision_models.__dict__[args.arch](args.dis_token)
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
@@ -475,7 +475,7 @@ if __name__ == '__main__':
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
-                        choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny',
+                        choices=['vit_tiny', 'vit_small', 'vit_base', 'deit_base', 'deit_tiny',
                                  'deit_small'] + torchvision_archs,
                         help="""Name of architecture to train. For quick experiments with ViTs,
                 we recommend using vit_tiny or vit_small.""")

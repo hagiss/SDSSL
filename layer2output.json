@@ -1,5 +1,5 @@
 {
-  "arch": "vit_base",
+  "arch": "deit_base",
   "patch_size": 16,
   "out_dim": 256,
   "use_fp16": false,
@@ -18,9 +18,9 @@
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
   "dataset": "imagenet",
-  "name": "byol/vit_base_16_l2o",
+  "name": "byol/deit_base_16_l2o",
   "accelerator": "ddp",
-  "accumulate": 1,
+  "accumulate": 32,
   "val_interval": 4,
   "div": 1,
   "ratio": 0,
