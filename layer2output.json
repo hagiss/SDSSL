@@ -20,7 +20,7 @@
   "dataset": "imagenet",
   "name": "byol/deit_base_16_l2o",
   "accelerator": "ddp",
-  "accumulate": 32,
+  "accumulate": 1,
   "val_interval": 4,
   "div": 1,
   "ratio": 0,
