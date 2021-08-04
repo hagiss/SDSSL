@@ -78,7 +78,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
+    def forward(self, x, drop):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
@@ -86,6 +86,7 @@ class Attention(nn.Module):
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
+        attn = attn * drop
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
@@ -105,8 +106,8 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, return_attention=False):
-        y, attn = self.attn(self.norm1(x))
+    def forward(self, x, drop, return_attention=False):
+        y, attn = self.attn(self.norm1(x), drop)
         if return_attention:
             return attn
         x = x + self.drop_path(y)
@@ -227,8 +228,12 @@ class VisionTransformer(nn.Module):
 
     def forward(self, x):
         x = self.prepare_tokens(x)
+        B, N, _ = x.shape
+        drop = torch.rand(B, N, N, N)
+        drop = drop > 0.2
+
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x, drop)
         x = self.norm(x)
         return x[:, 0]
 

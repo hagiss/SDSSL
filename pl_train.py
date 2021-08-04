@@ -131,33 +131,34 @@ class PLLearner(pl.LightningModule):
         return [self.optimizer]
 
     def forward(self, x):
-        image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+        # image_one, image_two = self.aug1(x), self.aug2(x)
+        # return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+        return self.teacher(x), self.student(x)
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
         batch_size = images.shape[0]
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        teacher_output1, student_output1 = self.forward(images)
 
-        if self.st_inter != self.t_inter:
-            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
+        # if self.st_inter != self.t_inter:
+            # teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+            # teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
-        if self.ratio > 0:
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
-            loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
-            loss = loss_output + self.ratio * loss_mid
-        else:
-            loss = loss_fn(student_output1, teacher_output1).mean()
-            loss += loss_fn(student_output2, teacher_output2).mean()
-            if self.st_inter:
-                loss *= 12
+        # if self.ratio > 0:
+        #     student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+            # student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            # teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+            # teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+            # loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
+            # loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
+            # loss = loss_output + self.ratio * loss_mid
+        # else:
+        loss = loss_fn(student_output1, teacher_output1).mean()
+        # loss += loss_fn(student_output2, teacher_output2).mean()
+        if self.st_inter:
+            loss *= 12
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -213,8 +214,8 @@ class PLLearner(pl.LightningModule):
         dist.all_gather(gather_t, train_labels)
         train_labels = torch.cat(gather_t).to(self.device)
 
-        k = 20
-        num_classes = 1000
+        k = 5
+        num_classes = 10
         retrieval_one_hot = torch.zeros(k, num_classes).to(self.device)
         top1, top5, total = 0.0, 0.0, 0
         # print("train_features", train_features)
@@ -295,25 +296,40 @@ def main(args):
     #     args.local_crops_scale,
     #     args.local_crops_number
     # )
-    pretrain_transform = T.Compose([
-        T.Resize((256, 256), interpolation=Image.BICUBIC),
-        # T.CenterCrop(image_size),
-        T.ToTensor(),
-        # T.Lambda(expand_greyscale)
-    ])
 
-    val_transform = T.Compose([
-        T.Resize((256, 256), interpolation=3),
-        T.CenterCrop((image_size, image_size)),
-        T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
 
     if args.dataset == "stl10":
+        pretrain_transform = T.Compose([
+            T.Resize((96, 96), interpolation=Image.BICUBIC),
+            # T.CenterCrop(image_size),
+            T.ToTensor(),
+            # T.Lambda(expand_greyscale),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
+
+        val_transform = T.Compose([
+            T.Resize((96, 96), interpolation=3),
+            T.CenterCrop((image_size, image_size)),
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
         dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
+        pretrain_transform = T.Compose([
+            T.Resize((256, 256), interpolation=Image.BICUBIC),
+            # T.CenterCrop(image_size),
+            T.ToTensor(),
+            # T.Lambda(expand_greyscale)
+        ])
+
+        val_transform = T.Compose([
+            T.Resize((256, 256), interpolation=3),
+            T.CenterCrop((image_size, image_size)),
+            T.ToTensor(),
+            T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ])
         path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
