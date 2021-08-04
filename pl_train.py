@@ -437,7 +437,7 @@ if __name__ == '__main__':
     parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
 
-    parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
+    parser.add_argument('--data', '-d', metavar='DIR', default='/data/dataset',
                         help='path to dataset')
     parser.add_argument('--dataset', '-ds', default='stl10',
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
