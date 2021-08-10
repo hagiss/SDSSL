@@ -185,87 +185,87 @@ class PLLearner(pl.LightningModule):
                 old_weight, up_weight = ma_params.data, current_params.data
                 ma_params.data = old_weight * m + (1 - m) * up_weight
 
-    @torch.no_grad()
-    def validation_step(self, batch, batch_idx):
-        x, label = batch
-
-        features = self.student.get_representation(x).detach().cpu()
-        return {'features': features, 'labels': label}
-
-    @torch.no_grad()
-    def validation_step_end(self, batch_parts):
-        # print(batch_parts)
-        features = batch_parts['features']
-        labels = batch_parts['labels']
-
-        return features, labels
-
-    @torch.no_grad()
-    def validation_epoch_end(self, outs):
-        train_features = torch.cat([f[0] for f in outs])
-        gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
-        dist.all_gather(gather_t, train_features)
-        train_features = torch.cat(gather_t)#.to(self.device)
-        train_features = F.normalize(train_features, dim=1).t()
-
-        train_labels = torch.cat([f[1] for f in outs])
-        gather_t = [torch.ones_like(train_labels) for _ in range(dist.get_world_size())]
-        dist.all_gather(gather_t, train_labels)
-        train_labels = torch.cat(gather_t).to(self.device)
-
-        k = 20
-        num_classes = 1000
-        retrieval_one_hot = torch.zeros(k, num_classes).to(self.device)
-        top1, top5, total = 0.0, 0.0, 0
-        # print("train_features", train_features)
-        # print(len(self.val_loader))
-
-        for batch in self.val_loader:
-            features = self.student.get_representation(batch[0].to(self.device))
-            features = F.normalize(features, dim=1).cpu()
-            # print("features", features)
-            targets = batch[1].to(self.device)
-            # print(targets)
-
-            batch_size = targets.shape[0]
-
-            similarity = torch.mm(features, train_features)
-            # print("similarity", similarity)
-            distances, indices = similarity.topk(k, largest=True, sorted=True)
-            distances = distances.to(self.device)
-            indices = indices.to(self.device)
-            # print("distances", distances)
-            # print("indices", indices)
-            candidates = train_labels.view(1, -1).expand(batch_size, -1)
-            # print("candidates", candidates)
-            retrieved_neighbors = torch.gather(candidates, 1, indices)
-
-            retrieval_one_hot.resize_(batch_size * k, num_classes).zero_()
-            retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
-            # print("retrieval_one_hot", retrieval_one_hot)
-            distances_transform = distances.clone().div_(0.07).exp_()
-            # print("distances_transform", distances_transform)
-            probs = torch.sum(
-                torch.mul(
-                    retrieval_one_hot.view(batch_size, -1, num_classes),
-                    distances_transform.view(batch_size, -1, 1),
-                ),
-                1,
-            )
-            # print("probs", probs)
-            _, predictions = probs.sort(1, True)
-            # print("prediction", predictions)
-
-            correct = predictions.eq(targets.data.view(-1, 1))
-            top1 = top1 + correct.narrow(1, 0, 1).sum().item()
-            top5 = top5 + correct.narrow(1, 0, 5).sum().item()
-            total += targets.size(0)
-
-        top1 = top1 * 100.0 / total
-        top5 = top5 * 100.0 / total
-        # print(top1, top5)
-        self.logger.experiment.add_scalar('top1', top1, self.current_epoch)
-        self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
+    # @torch.no_grad()
+    # def validation_step(self, batch, batch_idx):
+    #     x, label = batch
+    #
+    #     features = self.student.get_representation(x).detach().cpu()
+    #     return {'features': features, 'labels': label}
+    #
+    # @torch.no_grad()
+    # def validation_step_end(self, batch_parts):
+    #     # print(batch_parts)
+    #     features = batch_parts['features']
+    #     labels = batch_parts['labels']
+    #
+    #     return features, labels
+    #
+    # @torch.no_grad()
+    # def validation_epoch_end(self, outs):
+    #     train_features = torch.cat([f[0] for f in outs])
+    #     gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
+    #     dist.all_gather(gather_t, train_features)
+    #     train_features = torch.cat(gather_t)#.to(self.device)
+    #     train_features = F.normalize(train_features, dim=1).t()
+    #
+    #     train_labels = torch.cat([f[1] for f in outs])
+    #     gather_t = [torch.ones_like(train_labels) for _ in range(dist.get_world_size())]
+    #     dist.all_gather(gather_t, train_labels)
+    #     train_labels = torch.cat(gather_t).to(self.device)
+    #
+    #     k = 20
+    #     num_classes = 1000
+    #     retrieval_one_hot = torch.zeros(k, num_classes).to(self.device)
+    #     top1, top5, total = 0.0, 0.0, 0
+    #     # print("train_features", train_features)
+    #     # print(len(self.val_loader))
+    #
+    #     for batch in self.val_loader:
+    #         features = self.student.get_representation(batch[0].to(self.device))
+    #         features = F.normalize(features, dim=1).cpu()
+    #         # print("features", features)
+    #         targets = batch[1].to(self.device)
+    #         # print(targets)
+    #
+    #         batch_size = targets.shape[0]
+    #
+    #         similarity = torch.mm(features, train_features)
+    #         # print("similarity", similarity)
+    #         distances, indices = similarity.topk(k, largest=True, sorted=True)
+    #         distances = distances.to(self.device)
+    #         indices = indices.to(self.device)
+    #         # print("distances", distances)
+    #         # print("indices", indices)
+    #         candidates = train_labels.view(1, -1).expand(batch_size, -1)
+    #         # print("candidates", candidates)
+    #         retrieved_neighbors = torch.gather(candidates, 1, indices)
+    #
+    #         retrieval_one_hot.resize_(batch_size * k, num_classes).zero_()
+    #         retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
+    #         # print("retrieval_one_hot", retrieval_one_hot)
+    #         distances_transform = distances.clone().div_(0.07).exp_()
+    #         # print("distances_transform", distances_transform)
+    #         probs = torch.sum(
+    #             torch.mul(
+    #                 retrieval_one_hot.view(batch_size, -1, num_classes),
+    #                 distances_transform.view(batch_size, -1, 1),
+    #             ),
+    #             1,
+    #         )
+    #         # print("probs", probs)
+    #         _, predictions = probs.sort(1, True)
+    #         # print("prediction", predictions)
+    #
+    #         correct = predictions.eq(targets.data.view(-1, 1))
+    #         top1 = top1 + correct.narrow(1, 0, 1).sum().item()
+    #         top5 = top5 + correct.narrow(1, 0, 5).sum().item()
+    #         total += targets.size(0)
+    #
+    #     top1 = top1 * 100.0 / total
+    #     top5 = top5 * 100.0 / total
+    #     # print(top1, top5)
+    #     self.logger.experiment.add_scalar('top1', top1, self.current_epoch)
+    #     self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
 
 # class Monitor(pl.Callback):
@@ -393,7 +393,7 @@ def main(args):
         num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=args.val_interval,
+        # check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         num_nodes=args.multi_node,
         callbacks=[lr_monitor]
