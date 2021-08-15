@@ -5,12 +5,18 @@ from torch.utils.data import DataLoader, Dataset
 import argparse
 import torch.nn.functional as F
 from einops import repeat
+import os
+
+from pytorch_lightning.plugins.environments.cluster_environment import ClusterEnvironment
 
 from torchvision import transforms as T
 from pytorch_lightning.callbacks import LearningRateMonitor
 from torch import nn
 import random
 import torch.distributed as dist
+from pytorch_lightning.plugins.environments.cluster_environment import ClusterEnvironment
+from pytorch_lightning.plugins.training_type import DDPPlugin
+
 from torchvision import models as torchvision_models
 
 import utils
@@ -284,6 +290,30 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            and callable(torchvision_models.__dict__[name]))
 
 
+class MyClusterEnvironment(ClusterEnvironment):
+    def creates_children(self) -> bool:
+        # return True if the cluster is managed (you don't launch processes yourself)
+        return True
+
+    def world_size(self) -> int:
+        return int(os.environ["WORLD_SIZE"])
+
+    def global_rank(self) -> int:
+        return int(os.environ["RANK"])
+
+    def local_rank(self) -> int:
+        return int(os.environ["LOCAL_RANK"])
+
+    def node_rank(self) -> int:
+        return int(os.environ["NODE_RANK"])
+
+    def master_address(self) -> str:
+        return os.environ["MASTER_ADDRESS"]
+
+    def master_port(self) -> int:
+        return int(os.environ["MASTER_PORT"])
+
+
 def main(args):
     dataset = None
     dataset_train = None
@@ -384,6 +414,7 @@ def main(args):
 
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
+    cluster = [MyClusterEnvironment()]
     trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=args.max_epochs,
@@ -395,8 +426,9 @@ def main(args):
         accumulate_grad_batches=args.accumulate,
         # check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
-        num_nodes=args.multi_node,
-        callbacks=[lr_monitor]
+        # num_nodes=args.multi_node,
+        callbacks=[lr_monitor],
+        plugins=[cluster]
     )
 
     trainer.fit(learner, data_loader, train_loader)
