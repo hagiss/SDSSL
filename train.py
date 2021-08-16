@@ -49,6 +49,7 @@ def loss_fn(x, y):
 def expand_greyscale(t):
     return t.expand(3, -1, -1)
 
+
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
@@ -64,7 +65,7 @@ def train(dataset, args):
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
     args.name = args.name + "_{}e/{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, clip, args.weight_decay,
-                                                args.weight_decay_end)
+                                                         args.weight_decay_end)
 
     logger = SummaryWriter(log_dir=args.name)
 
@@ -106,7 +107,8 @@ def train(dataset, args):
     student, teacher = student.cuda(), teacher.cuda()
 
     teacher_without_ddp = teacher
-    student = nn.parallel.DistributedDataParallel(student, device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
+    student = nn.parallel.DistributedDataParallel(student, device_ids=[torch.cuda.current_device()],
+                                                  find_unused_parameters=True)
 
     for p in teacher.parameters():
         p.requires_grad = False
@@ -164,11 +166,12 @@ def train(dataset, args):
 
             for i, param_group in enumerate(optimizer.param_groups):
                 param_group['lr'] = lr_schedule[global_step]
-                if i==0:
+                if i == 0:
                     param_group["weight_decay"] = wd_schedule[global_step]
 
             image_one, image_two = aug1(x), aug2(x)
-            teacher_output1, student_output1, teacher_output2, student_output2 = teacher(image_one), student(image_two), teacher(image_two), student(image_one)
+            teacher_output1, student_output1, teacher_output2, student_output2 = teacher(image_one), student(
+                image_two), teacher(image_two), student(image_one)
 
             if st_inter != t_inter:
                 teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
@@ -227,4 +230,6 @@ def train(dataset, args):
             'args': args,
         }
 
-        utils.save_on_master(save_dict, os.path.join(args.name, f'checkpoint{epoch:04}.pth'))
+        utils.save_on_master(save_dict, os.path.join(args.name, f'checkpoint.pth'))
+        if epoch % 10 == 0:
+            utils.save_on_master(save_dict, os.path.join(args.name, f'checkpoint{epoch:04}.pth'))
