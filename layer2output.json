@@ -8,7 +8,6 @@
   "clip_grad": 0.3,
   "batch_size_per_gpu": 32,
   "epochs": 300,
-  "max_epochs": 300,
   "mlp_hidden": 4096,
   "lr": 1e-4,
   "warmup_epochs": 10,
@@ -18,14 +17,11 @@
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
   "dataset": "imagenet",
-  "name": "byol/vit_base_16_l2o",
+  "name": "log/byol/vit_base_16_l2o",
   "accelerator": "ddp",
-  "accumulate": 1,
-  "val_interval": 4,
   "div": 1,
   "ratio": 0,
   "up": 0,
   "st_inter": true,
-  "t_inter": false,
-  "multi_node": 1
+  "t_inter": false
 }
