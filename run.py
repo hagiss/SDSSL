@@ -1,4 +1,4 @@
-from train import train
+from byol import train
 import json
 import argparse
 from torchvision import models as torchvision_models

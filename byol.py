@@ -200,17 +200,17 @@ def train(dataset, args):
             # EMA
             with torch.no_grad():
                 m = momentum_schedule[global_step]
-                for current_params, ma_params in zip(student.net.parameters(), teacher_without_ddp.net.parameters()):
+                for current_params, ma_params in zip(student.module.net.parameters(), teacher_without_ddp.net.parameters()):
                     old_weight, up_weight = ma_params.data, current_params.data
                     ma_params.data = old_weight * m + (1 - m) * up_weight
 
                 if st_inter != t_inter:
-                    for current_params, ma_params in zip(student.projector[-1].parameters(),
+                    for current_params, ma_params in zip(student.module.projector[-1].parameters(),
                                                          teacher_without_ddp.projector.parameters()):
                         old_weight, up_weight = ma_params.data, current_params.data
                         ma_params.data = old_weight * m + (1 - m) * up_weight
                 else:
-                    for current_params, ma_params in zip(student.projector.parameters(),
+                    for current_params, ma_params in zip(student.module.projector.parameters(),
                                                          teacher_without_ddp.projector.parameters()):
                         old_weight, up_weight = ma_params.data, current_params.data
                         ma_params.data = old_weight * m + (1 - m) * up_weight

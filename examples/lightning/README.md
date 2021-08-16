@@ -10,5 +10,5 @@ $ pip install pillow
 ### Run
 
 ```bash
-$ python train.py --image_folder /path/to/your/images
+$ python byol.py --image_folder /path/to/your/images
 ```
