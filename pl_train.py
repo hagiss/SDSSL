@@ -264,6 +264,8 @@ class PLLearner(pl.LightningModule):
         top1 = top1 * 100.0 / total
         top5 = top5 * 100.0 / total
         # print(top1, top5)
+        if utils.get_rank() == 0:
+            print(f"Epoch: {self.current_epoch}  top1: {top1}  top5: {top5}")
         self.logger.experiment.add_scalar('top1', top1, self.current_epoch)
         self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
@@ -395,7 +397,6 @@ def main(args):
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
-        num_nodes=args.multi_node,
         callbacks=[lr_monitor]
     )
 
@@ -427,7 +428,6 @@ if __name__ == '__main__':
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
     parser.add_argument('--name', help='name for tensorboard')
     parser.add_argument('--val_interval', default=1, type=int, help='validation epoch interval')
-    parser.add_argument('--multi_node', default=1, type=int, help='number of multi-node')
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
