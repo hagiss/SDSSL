@@ -266,6 +266,8 @@ class PLLearner(pl.LightningModule):
         # print(top1, top5)
         if utils.get_rank() == 0:
             print(f"Epoch: {self.current_epoch}  top1: {top1}  top5: {top5}")
+            total_acc_t1.append(top1)
+            total_acc_t5.append(top5)
         self.logger.experiment.add_scalar('top1', top1, self.current_epoch)
         self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
@@ -285,6 +287,8 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
 
+total_acc_t1 = []
+total_acc_t5 = []
 
 def main(args):
     dataset = None
@@ -401,6 +405,10 @@ def main(args):
     )
 
     trainer.fit(learner, data_loader, train_loader)
+
+    if utils.get_rank() == 0:
+        print("top1", total_acc_t1)
+        print("top5", total_acc_t5)
 
 
 if __name__ == '__main__':
