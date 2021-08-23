@@ -6,7 +6,7 @@
   "weight_decay": 0.04,
   "weight_decay_end": 0.04,
   "clip_grad": 0.3,
-  "batch_size_per_gpu": 32,
+  "batch_size_per_gpu": 64,
   "epochs": 300,
   "max_epochs": 300,
   "mlp_hidden": 4096,
@@ -20,11 +20,12 @@
   "dataset": "imagenet",
   "name": "byol/vit_base_16_l2o",
   "accelerator": "ddp",
-  "accumulate": 8,
+  "accumulate": 4,
   "val_interval": 4,
   "div": 1,
   "ratio": 0,
   "up": 0,
   "st_inter": true,
-  "t_inter": false
+  "t_inter": false,
+  "multi_node": 1
 }

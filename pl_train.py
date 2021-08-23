@@ -79,7 +79,7 @@ class PLLearner(pl.LightningModule):
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
 
-        length = math.ceil(length / (args.accumulate * torch.cuda.device_count() * args.multi_node))
+        length = math.ceil(length / (args.accumulate * torch.cuda.device_count()))
 
         # ============ init schedulers ... ============
         self.lr_schedule = utils.cosine_scheduler(
@@ -261,8 +261,8 @@ class PLLearner(pl.LightningModule):
             top5 = top5 + correct.narrow(1, 0, 5).sum().item()
             total += targets.size(0)
 
-        top1 = top1 * 100.0 / total
-        top5 = top5 * 100.0 / total
+        # top1 = top1 * 100.0 / total
+        # top5 = top5 * 100.0 / total
         # print(top1, top5)
         if utils.get_rank() == 0:
             print(f"Epoch: {self.current_epoch}  top1: {top1}  top5: {top5}")
@@ -320,7 +320,7 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = 'dataset'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -401,7 +401,8 @@ def main(args):
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
-        callbacks=[lr_monitor]
+        callbacks=[lr_monitor],
+        progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
