@@ -261,8 +261,8 @@ class PLLearner(pl.LightningModule):
             top5 = top5 + correct.narrow(1, 0, 5).sum().item()
             total += targets.size(0)
 
-        # top1 = top1 * 100.0 / total
-        # top5 = top5 * 100.0 / total
+        top1 = top1 * 100.0 / total
+        top5 = top5 * 100.0 / total
         # print(top1, top5)
         if utils.get_rank() == 0:
             print(f"Epoch: {self.current_epoch}  top1: {top1}  top5: {top5}")
