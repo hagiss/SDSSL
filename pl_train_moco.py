@@ -122,6 +122,7 @@ class PLLearner(pl.LightningModule):
         )
 
         self.aug2 = self.aug1
+        self.criterion = nn.CrossEntropyLoss()
 
         # self.fp16_scaler = None
         # if args.use_fp16:
