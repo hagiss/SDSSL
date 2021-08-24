@@ -141,7 +141,7 @@ class PLLearner(pl.LightningModule):
 
         similarity_matrix = torch.matmul(s_features, t_features.T)
 
-        logits = similarity_matrix / 0.07
+        logits = similarity_matrix / 0.2
         loss = self.criterion(logits, labels)
         return loss
 
