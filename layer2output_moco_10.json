@@ -21,7 +21,7 @@
   "name": "moco/vit_base_16_l2o",
   "accelerator": "ddp",
   "accumulate": 4,
-  "val_interval": 4,
+  "val_interval": 20,
   "div": 1,
   "ratio": 0,
   "up": 0,

@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 import torchvision.datasets as datasets
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset
 import argparse
 import torch.nn.functional as F
 from einops import repeat
@@ -16,11 +16,8 @@ from torchvision import models as torchvision_models
 import utils
 import json
 import math
-import numpy as np
 import vision_transformer as vits
 from byol_pytorch import NetWrapper
-import fine_tune
-import sys
 
 from PIL import Image
 
@@ -48,30 +45,20 @@ class RandomApply(nn.Module):
 def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
-    return 2 - 2 * (x * y).sum(dim=-1)
+    return (2 - 2 * (x * y).sum(dim=-1)).mean()
 
 
 class PLLearner(pl.LightningModule):
-    def __init__(self, student, teacher, length, val_loader, embed_dim, args):
+    def __init__(self, student, length, val_loader, embed_dim, args):
         super().__init__()
         # self.save_hyperparameters()
         self.ratio = args.ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
 
-        teacher.load_state_dict(student.state_dict())
+        self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter)
-        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter)
-
-        if self.st_inter != self.t_inter:
-            self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
-        else:
-            self.teacher.projector.load_state_dict(self.student.projector.state_dict())
-
-        for p in self.teacher.parameters():
-            p.requires_grad = False
-        print(f"Student and Teacher are built: they are both {args.arch} network.")
+        print(f"Student is built: {args.arch} network.")
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
@@ -101,8 +88,6 @@ class PLLearner(pl.LightningModule):
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
-        self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
-                                                        args.epochs, length)
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
@@ -125,6 +110,7 @@ class PLLearner(pl.LightningModule):
         )
 
         self.aug2 = self.aug1
+        self.criterion = nn.CrossEntropyLoss()
 
         # self.fp16_scaler = None
         # if args.use_fp16:
@@ -133,9 +119,23 @@ class PLLearner(pl.LightningModule):
     def configure_optimizers(self):
         return [self.optimizer]
 
+    def info_nce_loss(self, s_features, t_features):
+        batch_size = s_features.shape[0]
+
+        labels = torch.arange(batch_size).to(self.device)
+
+        s_features = F.normalize(s_features, dim=1)
+        t_features = F.normalize(t_features, dim=1)
+
+        similarity_matrix = torch.matmul(s_features, t_features.T)
+
+        logits = similarity_matrix / 0.2
+        loss = self.criterion(logits, labels)
+        return loss
+
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+        return self.student(image_one), self.student(image_two), self.student(image_two), self.student(image_one)
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
@@ -153,12 +153,12 @@ class PLLearner(pl.LightningModule):
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
             teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
             teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
-            loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
+            loss_mid = self.info_nce_loss(student_mid1, teacher_mid1) + self.info_nce_loss(student_mid2, teacher_mid2)
+            loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
             loss = loss_output + self.ratio * loss_mid
         else:
-            loss = loss_fn(student_output1, teacher_output1).mean()
-            loss += loss_fn(student_output2, teacher_output2).mean()
+            loss = self.info_nce_loss(student_output1, teacher_output1)
+            loss += self.info_nce_loss(student_output2, teacher_output2)
             if self.st_inter:
                 loss *= 12
 
@@ -173,27 +173,26 @@ class PLLearner(pl.LightningModule):
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    def on_before_zero_grad(self, _):
-        m = self.momentum_schedule[self.global_step]
-        for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = old_weight * m + (1 - m) * up_weight
-
-        if self.st_inter != self.t_inter:
-            for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
-                old_weight, up_weight = ma_params.data, current_params.data
-                ma_params.data = old_weight * m + (1 - m) * up_weight
-        else:
-            for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
-                old_weight, up_weight = ma_params.data, current_params.data
-                ma_params.data = old_weight * m + (1 - m) * up_weight
+    # def on_before_zero_grad(self, _):
+    #     m = self.momentum_schedule[self.global_step]
+    #     for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
+    #         old_weight, up_weight = ma_params.data, current_params.data
+    #         ma_params.data = old_weight * m + (1 - m) * up_weight
+    #
+    #     if self.st_inter != self.t_inter:
+    #         for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
+    #             old_weight, up_weight = ma_params.data, current_params.data
+    #             ma_params.data = old_weight * m + (1 - m) * up_weight
+    #     else:
+    #         for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
+    #             old_weight, up_weight = ma_params.data, current_params.data
+    #             ma_params.data = old_weight * m + (1 - m) * up_weight
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
-        # torch.cuda.empty_cache()
         x, label = batch
 
-        features = self.teacher.get_representation(x).detach().cpu()
+        features = self.student.get_representation(x).detach().cpu()
         return {'features': features, 'labels': label}
 
     @torch.no_grad()
@@ -206,10 +205,10 @@ class PLLearner(pl.LightningModule):
 
     @torch.no_grad()
     def validation_epoch_end(self, outs):
-        train_features = torch.cat([f[0] for f in outs]).to(self.device)
+        train_features = torch.cat([f[0] for f in outs])
         gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_features)
-        train_features = torch.cat(gather_t).to(self.device)
+        train_features = torch.cat(gather_t)#.to(self.device)
         train_features = F.normalize(train_features, dim=1).t()
 
         train_labels = torch.cat([f[1] for f in outs])
@@ -225,8 +224,8 @@ class PLLearner(pl.LightningModule):
         # print(len(self.val_loader))
 
         for batch in self.val_loader:
-            features = self.teacher.get_representation(batch[0].to(self.device))
-            features = F.normalize(features, dim=1)#.cpu()
+            features = self.student.get_representation(batch[0].to(self.device))
+            features = F.normalize(features, dim=1).cpu()
             # print("features", features)
             targets = batch[1].to(self.device)
             # print(targets)
@@ -276,7 +275,6 @@ class PLLearner(pl.LightningModule):
         self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
 
-
 # class Monitor(pl.Callback):
 #     def on_train_batch_start(self, pl_trainer, pl_module, batch, batch_idx, dataloader_idx):
 #         if batch_idx % 100 == 0:
@@ -295,12 +293,10 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 total_acc_t1 = []
 total_acc_t5 = []
 
-
 def main(args):
     dataset = None
     dataset_train = None
     dataset_val = None
-    fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
     # pretrain_transform = DataAugmentationDINO(
@@ -314,12 +310,7 @@ def main(args):
         T.ToTensor(),
         # T.Lambda(expand_greyscale)
     ])
-    fine_transform = T.Compose([
-        T.RandomResizedCrop(224),
-        T.RandomHorizontalFlip(),
-        T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
+
     val_transform = T.Compose([
         T.Resize((256, 256), interpolation=3),
         T.CenterCrop((image_size, image_size)),
@@ -332,8 +323,7 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        # path = 'dataset'
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = 'dataset'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -346,40 +336,23 @@ def main(args):
             path + '/val',
             val_transform
         )
-        fine_dataset = datasets.ImageFolder(
-            path + '/train',
-            fine_transform
-        )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
-        # Subset(dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
-        pin_memory=True,
-    )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
-        batch_size=args.batch_size_per_gpu,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
     )
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
-        # Subset(dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=True,
     )
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
@@ -387,7 +360,6 @@ def main(args):
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=True,
     )
     print("loaded dataset!")
 
@@ -396,12 +368,12 @@ def main(args):
             patch_size=args.patch_size,
             drop_path_rate=0.1,  # stochastic depth
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
+        # teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
         student = torchvision_models.__dict__[args.arch]()
-        teacher = torchvision_models.__dict__[args.arch]()
+        # teacher = torchvision_models.__dict__[args.arch]()
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
@@ -417,7 +389,7 @@ def main(args):
     args.image_size = image_size
     args.total_batch = total_batch
 
-    learner = PLLearner(student, teacher, len(data_loader), val_loader, embed_dim, args)
+    learner = PLLearner(student, len(data_loader), val_loader, embed_dim, args)
 
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -441,22 +413,6 @@ def main(args):
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
         print("top5", total_acc_t5)
-
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch)
-    fine_trainer = pl.Trainer(
-        gpus=torch.cuda.device_count(),
-        max_epochs=100,
-        default_root_dir="output/vit.model",
-        accelerator=args.accelerator,
-        logger=logger,
-        num_sanity_val_steps=0,
-        accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=10,
-        sync_batchnorm=True,
-        callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
-    )
-    fine_trainer.fit(tuner, fine_loader, val_loader)
 
 
 if __name__ == '__main__':

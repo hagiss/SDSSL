@@ -3,6 +3,7 @@ import torch
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, Dataset
 import argparse
+import torch.distributed as dist
 
 from torchvision import transforms as T
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -13,6 +14,7 @@ from pl_train import PLLearner
 from torchmetrics import Accuracy
 from torchvision import models as torchvision_models
 import vision_transformer as vits
+import utils
 
 
 def default(val, def_val):
@@ -48,21 +50,28 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
 
+
 class Tuner(pl.LightningModule):
-    def __init__(self, model, args, length):
+    def __init__(self, model, embed_dim, total_batch_size):
         super().__init__()
 
         self.model = model
         # dim_mlp = self.model.fc[0].in_features
         # self.model.fc = nn.Identity()
         # self.model.train()
-        self.fc = nn.Linear(embed_dim, 10)
+        self.fc = nn.Linear(embed_dim, 1000)
 
         self.train_acc = Accuracy()
         self.valid_acc = Accuracy()
 
-        self.optim = torch.optim.Adam(self.fc.parameters(), args.lr, betas=(0.9, 0.999), eps=1e-08,
-                                      weight_decay=args.weight_decay, amsgrad=False)
+        self.optim = torch.optim.SGD(
+            self.fc.parameters(),
+            0.001 * total_batch_size / 256.,  # linear scaling rule
+            momentum=0.9,
+            weight_decay=0,  # we do not apply weight decay
+        )
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optim, 100, eta_min=0)
+
         # self.optim = LARS(self.optim, eps=0.0)
 
         # sched = torch.optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=length, eta_min=0, last_epoch=-1)
@@ -81,9 +90,9 @@ class Tuner(pl.LightningModule):
 
         # x = self.model.layer_repr().detach()
         # x = rearrange(x, 'd b c -> b (d c)')
-        x = self.model(x)
+        x = self.model.get_representation(x)
         logits = self.fc(x)
-        loss = self.criterion(logits.view(-1, 10), labels.view(-1))
+        loss = self.criterion(logits.view(-1, 1000), labels.view(-1))
 
         return loss, logits
 
@@ -95,29 +104,56 @@ class Tuner(pl.LightningModule):
         return np.sum(pred_flat == labels_flat) / len(labels_flat)
 
     def configure_optimizers(self):
-        return [self.optim]
+        return [self.optim], [{
+            'scheduler': self.scheduler,
+            'interval': 'step',
+            'frequency': 1,
+            'reduce_on_plateau': False,
+        }]
 
     def training_step(self, batch, _):
         x, label = batch
 
         loss, logits = self.forward(x, label)
 
-        self.log('train_loss', loss.detach().item(), on_step=True, prog_bar=True)
-        self.log('train_acc', self.flat_accuracy(logits.detach().cpu().numpy(), label.cpu().numpy()), on_step=True,
-                 prog_bar=True)
+        # accuracy = self.flat_accuracy(logits.detach().cpu().numpy(), label.cpu().numpy())
+
+        # self.log('fine_train_loss', loss.detach().item(), on_step=True, prog_bar=True)
+        # self.log('fine_train_acc', accuracy, on_step=True,
+        #          prog_bar=True)
         return {'loss': loss}
 
+    @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         x, label = batch
 
         loss, logits = self.forward(x, label)
 
-        self.log('val_loss', loss.detach().item(), prog_bar=True)
-        self.log('val_acc', self.flat_accuracy(logits.detach().cpu().numpy(), label.cpu().numpy()),
-                 prog_bar=True)
+        accuracy = self.flat_accuracy(logits.detach().cpu().numpy(), label.cpu().numpy())
 
+        # self.log('fine_val_loss', loss.detach().item(), prog_bar=True)
+        # self.log('fine_val_acc', prog_bar=True)
 
-to_tensor_transform = T.Compose([T.ToTensor()])
+        return {'acc': accuracy}
+
+    @torch.no_grad()
+    def validation_step_end(self, batch_parts):
+        # print(batch_parts)
+        features = batch_parts['features']
+        labels = batch_parts['labels']
+
+        return features, labels
+
+    @torch.no_grad()
+    def validation_epoch_end(self, outs):
+        accuracy = torch.cat([f[0] for f in outs]).to(self.device)
+        gather_t = [torch.ones_like(accuracy) for _ in range(dist.get_world_size())]
+        dist.all_gather(gather_t, accuracy)
+        accuracy = torch.cat(gather_t).to(self.device).mean()
+
+        if utils.get_rank() == 0:
+            print(f"Epoch: {self.current_epoch}  acc: {accuracy}")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='vit-simclr-fine-tune')
@@ -148,7 +184,8 @@ if __name__ == '__main__':
     dataset_val = None
 
     image_size = 96 if args.dataset == "stl10" else 224
-    to_tensor_transform = T.Compose([T.RandomResizedCrop(image_size), T.ToTensor(), T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))])
+    to_tensor_transform = T.Compose(
+        [T.RandomResizedCrop(image_size), T.ToTensor(), T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))])
 
     if args.dataset == "stl10":
         dataset = datasets.STL10(args.data, split='train', download=True, transform=to_tensor_transform)
@@ -178,14 +215,14 @@ if __name__ == '__main__':
         drop_last=False)
     print("loaded dataset!")
 
-    logger = pl.loggers.TensorBoardLogger(args.board_path, name='byol/fine/'+args.name)
+    logger = pl.loggers.TensorBoardLogger(args.board_path, name='byol/fine/' + args.name)
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
     # model = models.resnet18(pretrained=False, num_classes=128)
     # model.fc = nn.Sequential(model.fc, nn.ReLU(), nn.Linear(128, 128))
 
-    args.patch_size=8
-    args.min_lr=0.00001
+    args.patch_size = 8
+    args.min_lr = 0.00001
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
@@ -201,16 +238,17 @@ if __name__ == '__main__':
     else:
         print(f"Unknow architecture: {args.arch}")
 
-    args.ratio=0
-    args.optimizer="adamw"
-    args.weight_decay=0
-    args.weight_decay_end=0
-    args.epochs=1
-    args.momentum_teacher=1
-    args.out_dim=256
-    args.mlp_hidden=4096
-    args.div=1
-    learner = PLLearner.load_from_checkpoint(args.checkpoint, student=student, teacher=teacher, length=0, val_loader=None, embed_dim=embed_dim, args=args)
+    args.ratio = 0
+    args.optimizer = "adamw"
+    args.weight_decay = 0
+    args.weight_decay_end = 0
+    args.epochs = 1
+    args.momentum_teacher = 1
+    args.out_dim = 256
+    args.mlp_hidden = 4096
+    args.div = 1
+    learner = PLLearner.load_from_checkpoint(args.checkpoint, student=student, teacher=teacher, length=0,
+                                             val_loader=None, embed_dim=embed_dim, args=args)
 
     tuner = Tuner(learner.student.net, args, len(train_loader))
     trainer = pl.Trainer(
