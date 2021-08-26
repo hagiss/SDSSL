@@ -18,6 +18,7 @@ import json
 import math
 import vision_transformer as vits
 from byol_pytorch import NetWrapper
+import fine_tune
 
 from PIL import Image
 
@@ -202,9 +203,10 @@ class PLLearner(pl.LightningModule):
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
+        # torch.cuda.empty_cache()
         x, label = batch
 
-        features = self.student.get_representation(x).detach().cpu()
+        features = self.teacher.get_representation(x).detach().cpu()
         return {'features': features, 'labels': label}
 
     @torch.no_grad()
@@ -217,10 +219,10 @@ class PLLearner(pl.LightningModule):
 
     @torch.no_grad()
     def validation_epoch_end(self, outs):
-        train_features = torch.cat([f[0] for f in outs])
+        train_features = torch.cat([f[0] for f in outs]).to(self.device)
         gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_features)
-        train_features = torch.cat(gather_t)#.to(self.device)
+        train_features = torch.cat(gather_t).to(self.device)
         train_features = F.normalize(train_features, dim=1).t()
 
         train_labels = torch.cat([f[1] for f in outs])
@@ -236,8 +238,8 @@ class PLLearner(pl.LightningModule):
         # print(len(self.val_loader))
 
         for batch in self.val_loader:
-            features = self.student.get_representation(batch[0].to(self.device))
-            features = F.normalize(features, dim=1).cpu()
+            features = self.teacher.get_representation(batch[0].to(self.device))
+            features = F.normalize(features, dim=1)#.cpu()
             # print("features", features)
             targets = batch[1].to(self.device)
             # print(targets)
@@ -309,6 +311,7 @@ def main(args):
     dataset = None
     dataset_train = None
     dataset_val = None
+    fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
     # pretrain_transform = DataAugmentationDINO(
@@ -322,7 +325,12 @@ def main(args):
         T.ToTensor(),
         # T.Lambda(expand_greyscale)
     ])
-
+    fine_transform = T.Compose([
+        T.RandomResizedCrop(224),
+        T.RandomHorizontalFlip(),
+        T.ToTensor(),
+        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
     val_transform = T.Compose([
         T.Resize((256, 256), interpolation=3),
         T.CenterCrop((image_size, image_size)),
@@ -336,6 +344,7 @@ def main(args):
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
         path = 'dataset'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -348,23 +357,40 @@ def main(args):
             path + '/val',
             val_transform
         )
+        fine_dataset = datasets.ImageFolder(
+            path + '/train',
+            fine_transform
+        )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
+        # Subset(dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
+        pin_memory=True,
+    )
+    fine_loader = DataLoader(
+        fine_dataset,
+        # Subset(fine_dataset, np.arange(64)),
+        batch_size=args.batch_size_per_gpu,
+        shuffle=True,
+        num_workers=args.num_workers,
+        drop_last=True,
+        pin_memory=True,
     )
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
+        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
@@ -372,6 +398,7 @@ def main(args):
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     print("loaded dataset!")
 
@@ -425,6 +452,22 @@ def main(args):
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
         print("top5", total_acc_t5)
+
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch)
+    fine_trainer = pl.Trainer(
+        gpus=torch.cuda.device_count(),
+        max_epochs=100,
+        default_root_dir="output/vit.model",
+        accelerator=args.accelerator,
+        logger=logger,
+        num_sanity_val_steps=0,
+        accumulate_grad_batches=args.accumulate,
+        check_val_every_n_epoch=10,
+        sync_batchnorm=True,
+        callbacks=[lr_monitor],
+        progress_bar_refresh_rate=0
+    )
+    fine_trainer.fit(tuner, fine_loader, val_loader)
 
 
 if __name__ == '__main__':
