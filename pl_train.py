@@ -374,7 +374,7 @@ def main(args):
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
-        # Subset(dataset, np.arange(64)),
+        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         # sampler=sampler_train,
         shuffle=False,

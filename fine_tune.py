@@ -139,20 +139,19 @@ class Tuner(pl.LightningModule):
     @torch.no_grad()
     def validation_step_end(self, batch_parts):
         # print(batch_parts)
-        features = batch_parts['features']
-        labels = batch_parts['labels']
+        features = batch_parts['acc']
 
-        return features, labels
+        return features
 
     @torch.no_grad()
     def validation_epoch_end(self, outs):
-        accuracy = torch.cat([f[0] for f in outs]).to(self.device)
+        accuracy = torch.tensor([f for f in outs], device=self.device)
         gather_t = [torch.ones_like(accuracy) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, accuracy)
         accuracy = torch.cat(gather_t).to(self.device).mean()
 
         if utils.get_rank() == 0:
-            print(f"Epoch: {self.current_epoch}  acc: {accuracy}")
+            print(f"Epoch: {self.current_epoch}  acc: {accuracy.item()}")
 
 
 if __name__ == '__main__':
