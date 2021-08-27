@@ -81,6 +81,7 @@ class Tuner(pl.LightningModule):
         # self.scheduler = sched
 
         self.criterion = nn.CrossEntropyLoss()
+        self.best = 0.0
 
     def forward(self, x, labels):
         # with torch.no_grad():
@@ -149,9 +150,10 @@ class Tuner(pl.LightningModule):
         gather_t = [torch.ones_like(accuracy) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, accuracy)
         accuracy = torch.cat(gather_t).to(self.device).mean()
+        self.best = max(accuracy.item(), self.best)
 
         if utils.get_rank() == 0:
-            print(f"Epoch: {self.current_epoch}  acc: {accuracy.item()}")
+            print(f"Epoch: {self.current_epoch}  acc: {accuracy.item()}  best: {self.best}")
 
 
 if __name__ == '__main__':
