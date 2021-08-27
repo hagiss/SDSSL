@@ -440,7 +440,9 @@ def main(args):
 
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
+        print("best top1", max(total_acc_t1))
         print("top5", total_acc_t5)
+        print("best top5", max(total_acc_t5))
 
     tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch)
     fine_trainer = pl.Trainer(
