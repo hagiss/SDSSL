@@ -600,6 +600,9 @@ class MultiCropWrapper(nn.Module):
         # Run the head forward on the concatenated features.
         return self.head(output)
 
+    def get_representation(self, x):
+        self.backbone(x)
+
 
 def get_params_groups(model):
     regularized = []

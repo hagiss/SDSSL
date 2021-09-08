@@ -332,7 +332,7 @@ class StudentDINOHead(nn.Module):
     def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
         super().__init__()
         self.layers = nn.ModuleList([])
-        self.last_layers = nn.ModuleList([])
+        # self.last_layers = nn.ModuleList([])
 
         for i in range(12):
             if i == 11:
@@ -354,12 +354,21 @@ class StudentDINOHead(nn.Module):
                 mlp = nn.Sequential(*layers)
             self.layers.append(mlp)
         self.apply(self._init_weights)
-        for i in range(12):
-            last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
-            last_layer.weight_g.data.fill_(1)
-            if norm_last_layer:
-                last_layer.weight_g.requires_grad = False
-            self.last_layers.append(last_layer)
+        # for i in range(12):
+        #     last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        #     last_layer.weight_g.data.fill_(1)
+        #     if norm_last_layer:
+        #         last_layer.weight_g.requires_grad = False
+        #     self.last_layers.append(last_layer)
+        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+        self.dummy_last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        self.dummy_last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.dummy_last_layer.weight_g.requires_grad = False
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -372,8 +381,14 @@ class StudentDINOHead(nn.Module):
     def forward(self, x):
         ret = []
         x = rearrange(x, '(d bv) e -> d bv e', d=12)
-        for i, (mlp, last_layer) in enumerate(zip(self.layers, self.last_layers)):
-            ret.append(last_layer(nn.functional.normalize(mlp(x[i, :]))))
+        for i, mlp in enumerate(self.layers):
+            temp = nn.functional.normalize(mlp(x[i, :]))
+            if i == 11:
+                temp = self.last_layer(temp)
+            else:
+                # with torch.no_grad():
+                temp = self.dummy_last_layer(temp)
+            ret.append(temp)
         ret = torch.cat(ret)
         # ret = rearrange(ret, 'b d e -> (b d) e')
         # last = []
