@@ -162,19 +162,19 @@ class PLLearner(pl.LightningModule):
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
         #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
-        if self.ratio > 0:
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss(student_mid1, teacher_mid1) + self.info_nce_loss(student_mid2, teacher_mid2)
-            loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
-            loss = loss_output + self.ratio * loss_mid
-        else:
-            loss = self.info_nce_loss(student_output1, teacher_output1)
-            loss += self.info_nce_loss(student_output2, teacher_output2)
-            if self.st_inter:
-                loss *= 12
+        # if self.ratio > 0:
+        #     student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+        #     student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+        #     teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+        #     teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+        #     loss_mid = self.info_nce_loss(student_mid1, teacher_mid1) + self.info_nce_loss(student_mid2, teacher_mid2)
+        #     loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
+        #     loss = loss_output + self.ratio * loss_mid
+        # else:
+        loss = self.info_nce_loss(student_output1, teacher_output1)
+        loss += self.info_nce_loss(student_output2, teacher_output2)
+        if self.st_inter:
+            loss *= 12
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 

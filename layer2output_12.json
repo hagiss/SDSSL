@@ -11,7 +11,7 @@
   "max_epochs": 300,
   "mlp_hidden": 4096,
   "lr": 1e-4,
-  "warmup_epochs": 10,
+  "warmup_epochs": 40,
   "min_lr": 2e-06,
   "seed": 0,
   "num_workers": 10,

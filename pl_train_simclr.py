@@ -18,6 +18,7 @@ import json
 import math
 import vision_transformer as vits
 from byol_pytorch import NetWrapper
+import fine_tune
 
 from PIL import Image
 
@@ -55,6 +56,7 @@ class PLLearner(pl.LightningModule):
         self.ratio = args.ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
+        self.temperature = args.temperature
 
         self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
 
@@ -112,6 +114,10 @@ class PLLearner(pl.LightningModule):
         self.aug2 = self.aug1
         self.criterion = nn.CrossEntropyLoss()
 
+        self.labels = None
+        self.label = None
+        self.mask = None
+
         # self.fp16_scaler = None
         # if args.use_fp16:
         #     self.fp16_scaler = torch.cuda.amp.GradScaler()
@@ -119,48 +125,73 @@ class PLLearner(pl.LightningModule):
     def configure_optimizers(self):
         return [self.optimizer]
 
-    def info_nce_loss(self, s_features, t_features):
-        batch_size = s_features.shape[0]
-
-        labels = torch.arange(batch_size).to(self.device)
-
-        s_features = F.normalize(s_features, dim=1)
-        t_features = F.normalize(t_features, dim=1)
-
-        similarity_matrix = torch.matmul(s_features, t_features.T)
-
-        logits = similarity_matrix / 0.2
-        loss = self.criterion(logits, labels)
-        return loss
-
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.student(image_one), self.student(image_two), self.student(image_two), self.student(image_one)
+        return self.student(image_one), self.student(image_two)
+
+    def info_nce_loss(self, features):
+        if self.labels is None:
+            b, _ = features.shape
+            self.labels = torch.cat([torch.arange(b/2) for i in range(2)], dim=0)
+            self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
+            self.labels.to(self.device)
+
+        features = F.normalize(features, dim=1)
+
+        similarity_matrix = torch.matmul(features, features.T)
+
+        if self.mask is None:
+            self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool, device=self.device)
+        labels = self.labels[~self.mask].view(self.labels.shape[0], -1)
+        similarity_matrix = similarity_matrix[~self.mask].view(similarity_matrix.shape[0], -1)
+
+        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+
+        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+
+        logits = torch.cat([positives, negatives], dim=1)
+        if self.label is None:
+            self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
+
+        logits = logits / self.temperature
+        return self.criterion(logits, self.label)
+
+    def info_nce_loss_intermediate(self, layer_features, output):
+        b = layer_features.shape[0]
+
+        labels = torch.cat([torch.arange(b/11, dtype=torch.long, device=self.device) for _ in range(11)], dim=0)
+
+        layer_features = F.normalize(layer_features, dim=1)
+        output = F.normalize(output, dim=1).detach()
+
+        similarity_matrix = torch.matmul(layer_features, output.T)
+
+        logits = similarity_matrix / 0.1
+        loss = self.criterion(logits, labels)
+        return loss
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
         batch_size = images.shape[0]
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        student_output1, student_output2 = self.forward(images)
 
+        # if self.st_inter != self.t_inter:
+        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
+
+        loss_mid = 0.0
         if self.st_inter != self.t_inter:
-            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
-
-        if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss(student_mid1, teacher_mid1) + self.info_nce_loss(student_mid2, teacher_mid2)
-            loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
-            loss = loss_output + self.ratio * loss_mid
+            loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2) + self.info_nce_loss_intermediate(student_mid2, student_output1)
+        loss_output = self.info_nce_loss(torch.cat((student_output1, student_output2), dim=0))
+        if self.ratio > 0:
+            ratio = self.ratio
         else:
-            loss = self.info_nce_loss(student_output1, teacher_output1)
-            loss += self.info_nce_loss(student_output2, teacher_output2)
-            if self.st_inter:
-                loss *= 12
+            ratio = 11
+        loss = loss_output + ratio*loss_mid
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -205,10 +236,10 @@ class PLLearner(pl.LightningModule):
 
     @torch.no_grad()
     def validation_epoch_end(self, outs):
-        train_features = torch.cat([f[0] for f in outs])
+        train_features = torch.cat([f[0] for f in outs]).to(self.device)
         gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_features)
-        train_features = torch.cat(gather_t)#.to(self.device)
+        train_features = torch.cat(gather_t).to(self.device)
         train_features = F.normalize(train_features, dim=1).t()
 
         train_labels = torch.cat([f[1] for f in outs])
@@ -225,7 +256,7 @@ class PLLearner(pl.LightningModule):
 
         for batch in self.val_loader:
             features = self.student.get_representation(batch[0].to(self.device))
-            features = F.normalize(features, dim=1).cpu()
+            features = F.normalize(features, dim=1)
             # print("features", features)
             targets = batch[1].to(self.device)
             # print(targets)
@@ -297,6 +328,7 @@ def main(args):
     dataset = None
     dataset_train = None
     dataset_val = None
+    fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
     # pretrain_transform = DataAugmentationDINO(
@@ -310,7 +342,12 @@ def main(args):
         T.ToTensor(),
         # T.Lambda(expand_greyscale)
     ])
-
+    fine_transform = T.Compose([
+        T.RandomResizedCrop(224),
+        T.RandomHorizontalFlip(),
+        T.ToTensor(),
+        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
     val_transform = T.Compose([
         T.Resize((256, 256), interpolation=3),
         T.CenterCrop((image_size, image_size)),
@@ -324,6 +361,7 @@ def main(args):
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
         path = 'dataset'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -336,6 +374,10 @@ def main(args):
             path + '/val',
             val_transform
         )
+        fine_dataset = datasets.ImageFolder(
+            path + '/train',
+            fine_transform
+        )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
@@ -345,6 +387,15 @@ def main(args):
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
+    )
+    fine_loader = DataLoader(
+        fine_dataset,
+        # Subset(fine_dataset, np.arange(64)),
+        batch_size=args.batch_size_per_gpu,
+        shuffle=True,
+        num_workers=args.num_workers,
+        drop_last=True,
+        pin_memory=True,
     )
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
@@ -412,11 +463,31 @@ def main(args):
 
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
+        print("best top1", max(total_acc_t1))
         print("top5", total_acc_t5)
+        print("best top5", max(total_acc_t5))
+
+    learner.student.eval()
+
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch)
+    fine_trainer = pl.Trainer(
+        gpus=torch.cuda.device_count(),
+        max_epochs=100,
+        default_root_dir="output/vit.model",
+        accelerator="ddp",
+        logger=logger,
+        num_sanity_val_steps=0,
+        accumulate_grad_batches=args.accumulate,
+        check_val_every_n_epoch=10,
+        sync_batchnorm=True,
+        callbacks=[lr_monitor],
+        progress_bar_refresh_rate=0
+    )
+    fine_trainer.fit(tuner, fine_loader, val_loader)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='byol')
+    parser = argparse.ArgumentParser(description='simclr')
 
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
@@ -433,6 +504,7 @@ if __name__ == '__main__':
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
+    parser.add_argument('--temperature', default=0.1, type=float, help='temperature for infoNCE')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
