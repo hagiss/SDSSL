@@ -134,8 +134,9 @@ class PLLearner(pl.LightningModule):
 
     def info_nce_loss(self, s_features, t_features):
         batch_size = s_features.shape[0]
+        depth = 12 if self.st_inter != self.t_inter else 1
 
-        labels = torch.arange(batch_size).to(self.device)
+        labels = torch.cat([torch.arange(batch_size/depth, dtype=torch.long) for _ in range(depth)], dim=0).to(self.device)
 
         s_features = F.normalize(s_features, dim=1)
         t_features = F.normalize(t_features, dim=1)
@@ -157,9 +158,9 @@ class PLLearner(pl.LightningModule):
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
-        if self.st_inter != self.t_inter:
-            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
+        # if self.st_inter != self.t_inter:
+        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
         if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
@@ -343,8 +344,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
-        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = 'dataset'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -451,7 +452,9 @@ def main(args):
 
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
+        print("best top1", max(total_acc_t1))
         print("top5", total_acc_t5)
+        print("best top5", max(total_acc_t5))
 
     tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch)
     fine_trainer = pl.Trainer(

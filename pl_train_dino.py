@@ -384,8 +384,8 @@ if __name__ == '__main__':
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
-        # path = '/dataset'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = '/dataset'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -468,16 +468,16 @@ if __name__ == '__main__':
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         callbacks=[lr_monitor],
-        # progress_bar_refresh_rate=0
+        progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
 
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
-        # print("best top1", max(total_acc_t1))
+        print("best top1", max(total_acc_t1))
         print("top5", total_acc_t5)
-        # print("best top5", max(total_acc_t5))
+        print("best top5", max(total_acc_t5))
 
     total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
 
@@ -493,6 +493,6 @@ if __name__ == '__main__':
         check_val_every_n_epoch=10,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        # progress_bar_refresh_rate=0
+        progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader, val_loader)
