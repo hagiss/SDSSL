@@ -601,7 +601,7 @@ class MultiCropWrapper(nn.Module):
         return self.head(output)
 
     def get_representation(self, x):
-        self.backbone(x)
+        return self.backbone(x)
 
 
 def get_params_groups(model):

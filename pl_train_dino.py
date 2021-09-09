@@ -54,7 +54,7 @@ class PLLearner(pl.LightningModule):
             args.out_dim,
             use_bn=False,
             norm_last_layer=args.norm_last_layer,
-            nlayers=3,
+            nlayers=2,
         ), True)
         self.teacher = utils.MultiCropWrapper(
             teacher,
@@ -64,9 +64,9 @@ class PLLearner(pl.LightningModule):
         # self.teacher_without_ddp = self.teacher
 
         self.teacher.head.mlp.load_state_dict(self.student.head.layers[-1].state_dict())
-        # self.teacher.head.last_layer.load_state_dict(self.student.head.last_layers[-1].state_dict())
+        self.teacher.head.last_layer.load_state_dict(self.student.head.last_layers[-1].state_dict())
         # self.teacher.head.mlp.load_state_dict(self.student.head.mlp.state_dict())
-        self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer.state_dict())
+        # self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer.state_dict())
 
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -115,8 +115,8 @@ class PLLearner(pl.LightningModule):
         if args.use_fp16:
             self.fp16_scaler = torch.cuda.amp.GradScaler()
 
-        self.i = 0
-        self.j = 1
+        # self.i = 0
+        # self.j = 1
 
     def configure_optimizers(self):
         return [self.optimizer]
@@ -125,9 +125,9 @@ class PLLearner(pl.LightningModule):
         return self.teacher(x[:2]), self.student(x)
 
     def training_step(self, batch, batch_idx):
-        if self.i != self.j:
-            self.student.head.dummy_last_layer.load_state_dict(self.student.head.last_layer.state_dict())
-            self.i += 1
+        # if self.i != self.j:
+        #     self.student.head.dummy_last_layer.load_state_dict(self.student.head.last_layer.state_dict())
+        #     self.i += 1
 
         images = batch[0]
 
@@ -139,7 +139,7 @@ class PLLearner(pl.LightningModule):
         return {'loss': loss}
 
     def on_after_backward(self):
-        self.j += 1
+        # self.j += 1
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
@@ -156,7 +156,7 @@ class PLLearner(pl.LightningModule):
         for current_params, ma_params in zip(self.student.head.layers[-1].parameters(), self.teacher.head.mlp.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
-        for current_params, ma_params in zip(self.student.head.last_layer.parameters(), self.teacher.head.last_layer.parameters()):
+        for current_params, ma_params in zip(self.student.head.last_layers[-1].parameters(), self.teacher.head.last_layer.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
 
@@ -179,7 +179,6 @@ class PLLearner(pl.LightningModule):
     @torch.no_grad()
     def validation_epoch_end(self, outs):
         train_features = torch.cat([f[0] for f in outs]).to(self.device)
-        print(train_features.shape)
         gather_t = [torch.ones_like(train_features) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_features)
         train_features = torch.cat(gather_t).to(self.device)
@@ -189,8 +188,6 @@ class PLLearner(pl.LightningModule):
         gather_t = [torch.ones_like(train_labels) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, train_labels)
         train_labels = torch.cat(gather_t).to(self.device)
-
-        print("Gathered all features!")
 
         k = 20
         num_classes = 1000
@@ -466,7 +463,7 @@ if __name__ == '__main__':
         default_root_dir="output/vit.model",
         accelerator='ddp',
         logger=logger,
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=2,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
@@ -478,9 +475,9 @@ if __name__ == '__main__':
 
     if utils.get_rank() == 0:
         print("top1", total_acc_t1)
-        print("best top1", max(total_acc_t1))
+        # print("best top1", max(total_acc_t1))
         print("top5", total_acc_t5)
-        print("best top5", max(total_acc_t5))
+        # print("best top5", max(total_acc_t5))
 
     total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
 
@@ -489,13 +486,13 @@ if __name__ == '__main__':
         gpus=torch.cuda.device_count(),
         max_epochs=100,
         default_root_dir="output/vit.model",
-        accelerator=args.accelerator,
+        accelerator="ddp",
         logger=logger,
         num_sanity_val_steps=0,
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=10,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
+        # progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader, val_loader)
