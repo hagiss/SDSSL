@@ -332,8 +332,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
-        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = 'dataset'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -417,32 +417,38 @@ def main(args):
     args.image_size = image_size
     args.total_batch = total_batch
 
-    learner = PLLearner(student, teacher, len(data_loader), val_loader, embed_dim, args)
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
+                                             student=student,
+                                             teacher=teacher,
+                                             length=len(data_loader),
+                                             val_loader=val_loader,
+                                             embed_dim=embed_dim,
+                                             args=args)
 
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    trainer = pl.Trainer(
-        gpus=torch.cuda.device_count(),
-        max_epochs=args.max_epochs,
-        default_root_dir="output/vit.model",
-        accelerator=args.accelerator,
-        logger=logger,
-        num_sanity_val_steps=0,
-        gradient_clip_val=args.clip_grad,
-        accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=args.val_interval,
-        sync_batchnorm=True,
-        callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
-    )
-
-    trainer.fit(learner, data_loader, train_loader)
-
-    if utils.get_rank() == 0:
-        print("top1", total_acc_t1)
-        print("best top1", max(total_acc_t1))
-        print("top5", total_acc_t5)
-        print("best top5", max(total_acc_t5))
+    # trainer = pl.Trainer(
+    #     gpus=torch.cuda.device_count(),
+    #     max_epochs=args.max_epochs,
+    #     default_root_dir="output/vit.model",
+    #     accelerator=args.accelerator,
+    #     logger=logger,
+    #     num_sanity_val_steps=0,
+    #     gradient_clip_val=args.clip_grad,
+    #     accumulate_grad_batches=args.accumulate,
+    #     check_val_every_n_epoch=args.val_interval,
+    #     sync_batchnorm=True,
+    #     callbacks=[lr_monitor],
+    #     progress_bar_refresh_rate=0
+    # )
+    #
+    # trainer.fit(learner, data_loader, train_loader)
+    #
+    # if utils.get_rank() == 0:
+    #     print("top1", total_acc_t1)
+    #     print("best top1", max(total_acc_t1))
+    #     print("top5", total_acc_t5)
+    #     print("best top5", max(total_acc_t5))
 
     tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch)
     fine_trainer = pl.Trainer(
@@ -450,9 +456,9 @@ def main(args):
         max_epochs=100,
         default_root_dir="output/vit.model",
         accelerator=args.accelerator,
-        # logger=logger,
+        logger=logger,
         num_sanity_val_steps=0,
-        # accumulate_grad_batches=args.accumulate,
+        # accumulate_grad_batches=1,
         check_val_every_n_epoch=10,
         sync_batchnorm=True,
         callbacks=[lr_monitor],

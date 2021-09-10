@@ -52,7 +52,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 
 class Tuner(pl.LightningModule):
-    def __init__(self, model, embed_dim, total_batch_size):
+    def __init__(self, model, embed_dim, total_batch_size, lr=0.001):
         super().__init__()
 
         self.model = model
@@ -66,7 +66,7 @@ class Tuner(pl.LightningModule):
 
         self.optim = torch.optim.SGD(
             self.fc.parameters(),
-            0.001 * total_batch_size / 256.,  # linear scaling rule
+            lr * 4096 / 256.,  # linear scaling rule
             momentum=0.9,
             weight_decay=0,  # we do not apply weight decay
         )
