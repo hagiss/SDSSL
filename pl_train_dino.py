@@ -481,7 +481,7 @@ if __name__ == '__main__':
 
     total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch)
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.005)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -496,3 +496,6 @@ if __name__ == '__main__':
         progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader, val_loader)
+
+    tuner2 = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.008)
+    fine_trainer.fit(tuner2, fine_loader, val_loader)
