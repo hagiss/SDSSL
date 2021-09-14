@@ -383,6 +383,7 @@ if __name__ == '__main__':
         dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
+        fine_dataset = datasets.STL10(args.data, split='train', download=True, transform=fine_transform)
     elif args.dataset == "imagenet":
         # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         path = '/dataset'

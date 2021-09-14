@@ -18,7 +18,7 @@ import json
 import math
 import numpy as np
 import vision_transformer as vits
-from byol_pytorch import NetWrapper
+from byol_pytorch import NetWrapper, MLP
 import fine_tune
 import sys
 
@@ -71,6 +71,8 @@ class PLLearner(pl.LightningModule):
 
         for p in self.teacher.parameters():
             p.requires_grad = False
+        # for p in self.student.dummy_predictor.parameters():
+        #     p.requires_grad = False
         print(f"Student and Teacher are built: they are both {args.arch} network.")
 
         # ============ preparing optimizer ... ============
@@ -125,6 +127,8 @@ class PLLearner(pl.LightningModule):
         )
 
         self.aug2 = self.aug1
+        self.i = 0
+        self.j = 1
 
         # self.fp16_scaler = None
         # if args.use_fp16:
@@ -135,18 +139,31 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+        student_output1, student_output_pred1 = self.student(image_two)
+        student_output2, student_output_pred2 = self.student(image_one)
+        return self.teacher(image_one), student_output1, student_output_pred1, self.teacher(image_two), student_output2, student_output_pred2
 
     def training_step(self, batch, batch_idx):
+        # if self.i != self.j:
+        #     self.i += 1
+        #     self.student.dummy_predictor.load_state_dict(self.student.predictor.state_dict())
+
         images = batch[0]
         batch_size = images.shape[0]
 
-        # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
+        # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+        teacher_output1, student_output1, student_output_pred1, teacher_output2, student_output2, student_output_pred2 = self.forward(images)
+        # teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+
+        loss_pred = 0
         if self.st_inter != self.t_inter:
             teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
             teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
+
+            loss_pred = loss_fn(student_output_pred1, teacher_output1).mean()
+            loss_pred += loss_fn(student_output_pred2, teacher_output2).mean()
+            loss_pred *= 12
 
         if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
@@ -162,6 +179,8 @@ class PLLearner(pl.LightningModule):
             if self.st_inter:
                 loss *= 12
 
+        loss += loss_pred
+
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
         return {'loss': loss}
@@ -174,6 +193,7 @@ class PLLearner(pl.LightningModule):
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
     def on_before_zero_grad(self, _):
+        # self.j += 1
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
@@ -303,25 +323,26 @@ def main(args):
     fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
+    image_size_resized = 96 if args.dataset == "stl10" else 256
     # pretrain_transform = DataAugmentationDINO(
     #     args.global_crops_scale,
     #     args.local_crops_scale,
     #     args.local_crops_number
     # )
     pretrain_transform = T.Compose([
-        T.Resize((256, 256), interpolation=Image.BICUBIC),
+        T.Resize((image_size_resized, image_size_resized), interpolation=Image.BICUBIC),
         # T.CenterCrop(image_size),
         T.ToTensor(),
         # T.Lambda(expand_greyscale)
     ])
     fine_transform = T.Compose([
-        T.RandomResizedCrop(224),
+        T.RandomResizedCrop(image_size),
         T.RandomHorizontalFlip(),
         T.ToTensor(),
         T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
     val_transform = T.Compose([
-        T.Resize((256, 256), interpolation=3),
+        T.Resize((image_size_resized, image_size_resized), interpolation=3),
         T.CenterCrop((image_size, image_size)),
         T.ToTensor(),
         T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -331,6 +352,7 @@ def main(args):
         dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
+        fine_dataset = datasets.STL10(args.data, split='train', download=True, transform=fine_transform)
     elif args.dataset == "imagenet":
         path = 'dataset'
         # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'

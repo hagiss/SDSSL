@@ -29,6 +29,11 @@ class NetWrapper(nn.Module):
         self.predictor = None
         self.projection_hidden_size = args.mlp_hidden
 
+        # if prediction:
+        #     self.predictor = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
+        #     self.dummy_predictor = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
+
+
         self.up = args.up
 
         if intermediate is False:
@@ -69,11 +74,17 @@ class NetWrapper(nn.Module):
         if self.intermediate:
             ret = []
             if self.predictor is not None:
+                ret_pred = []
                 representation = rearrange(representation, "(d b) e -> d b e", d=12)
+                # for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
                 for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
-                    ret.append(predict(project(representation[i, :])))
+                    proj = project(representation[i, :])
+                    ret.append(predict(proj))
+                    ret_pred.append(predict(proj.detach()))
                 ret = torch.cat(ret)
+                ret_pred = torch.cat(ret_pred)
                 # shape: [(d b) e] -> [12*batch, e]
+                return ret, ret_pred
             else:
                 representation = rearrange(representation, "(d b) e -> d b e", d=12)
                 for i, project in enumerate(self.projector):
@@ -90,6 +101,8 @@ class NetWrapper(nn.Module):
         else:
             ret = self.projector(representation)
             if self.predictor is not None:
+                ret_pred = self.predictor(ret.detach())
                 ret = self.predictor(ret)
+                return ret, ret_pred
 
         return ret
