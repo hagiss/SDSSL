@@ -226,7 +226,7 @@ class VisionTransformer(nn.Module):
         return self.pos_drop(x)
 
     def forward(self, x):
-        x = self.prepare_tokens(x)
+        x = self.prepare_tokens(x).detach()
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
