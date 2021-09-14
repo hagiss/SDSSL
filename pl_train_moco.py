@@ -135,7 +135,7 @@ class PLLearner(pl.LightningModule):
     def info_nce_loss(self, s_features, t_features):
         batch_size = s_features.shape[0]
 
-        labels = torch.cat([torch.arange(batch_size/depth, dtype=torch.long) for _ in range(depth)], dim=0).to(self.device)
+        labels = torch.arange(batch_size, dtype=torch.long).to(self.device)
 
         s_features = F.normalize(s_features, dim=1)
         t_features = F.normalize(t_features, dim=1)
