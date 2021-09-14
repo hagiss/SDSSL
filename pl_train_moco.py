@@ -142,9 +142,11 @@ class PLLearner(pl.LightningModule):
 
         similarity_matrix = torch.matmul(s_features, t_features.T)
 
-        logits = similarity_matrix / 0.2
+        tau = 0.2
+
+        logits = similarity_matrix / tau
         loss = self.criterion(logits, labels)
-        return loss
+        return 2*tau*loss
 
     def info_nce_loss_layer(self, s_features, t_features):
         batch_size = s_features.shape[0]
@@ -157,9 +159,11 @@ class PLLearner(pl.LightningModule):
 
         similarity_matrix = torch.matmul(s_features, t_features.T)
 
-        logits = similarity_matrix / 0.2
+        tau = 0.2
+
+        logits = similarity_matrix / tau
         loss = self.criterion(logits, labels)
-        return loss
+        return 2*tau*loss
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
