@@ -429,12 +429,10 @@ def main(args):
             patch_size=args.patch_size,
             drop_path_rate=0.1,  # stochastic depth
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
         student = torchvision_models.__dict__[args.arch]()
-        teacher = torchvision_models.__dict__[args.arch]()
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
@@ -452,7 +450,6 @@ def main(args):
 
     learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
                                              student=student,
-                                             teacher=teacher,
                                              length=len(data_loader),
                                              val_loader=val_loader,
                                              embed_dim=embed_dim,
@@ -461,7 +458,7 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.03)
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.03)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -480,7 +477,7 @@ def main(args):
     fine_trainer.max_epochs += 100
     fine_trainer.global_step = 0
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.01)
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.01)
     fine_trainer.fit(tuner, fine_loader1, val_loader)
 
 
