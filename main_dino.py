@@ -356,11 +356,12 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
 class DINOLoss(nn.Module):
     def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
                  warmup_teacher_temp_epochs, nepochs, student_temp=0.1,
-                 center_momentum=0.9):
+                 center_momentum=0.9, l2o=False):
         super().__init__()
         self.student_temp = student_temp
         self.center_momentum = center_momentum
         self.ncrops = ncrops
+        self.l2o = l2o
         self.register_buffer("center", torch.zeros(1, out_dim))
         # we apply a warm up for the teacher temperature because
         # a too high temperature makes the training instable at the beginning
@@ -370,32 +371,57 @@ class DINOLoss(nn.Module):
             np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp
         ))
 
-    def forward(self, student_output, teacher_output, epoch):
+    def forward(self, student_output, teacher_output, epoch, student_detached=None):
         """
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
         student_out = student_output / self.student_temp
-        student_out = student_out.chunk(self.ncrops*12)
-        # student_out = student_out.chunk(self.ncrops)
+        crops = self.ncrops * 12 if self.l2o is True else self.ncrops
+        student_out = student_out.chunk(crops)
+
+        if self.l2o and student_detached is not None:
+            student_det = student_detached / self.student_temp
+            student_det = student_det.chunk(crops)
+
+        div = 12 if self.l2o is True else 1
 
         # teacher centering and sharpening
         temp = self.teacher_temp_schedule[epoch]
         teacher_out = F.softmax((teacher_output - self.center) / temp, dim=-1)
         teacher_out = teacher_out.detach().chunk(2)
 
-        total_loss = 0
-        n_loss_terms = 0
+        total_loss_out = 0
+        n_loss_out = 0
+        total_loss_head = 0
+        n_loss_head = 0
+        total_loss_low = 0
+        n_loss_low = 0
         for iq, q in enumerate(teacher_out):
             for v in range(len(student_out)):
-                if v == iq:
+                if int(v/div) == iq:
                     # we skip cases where student and teacher operate on the same view
                     continue
-                loss = torch.sum(-q * F.log_softmax(student_out[v], dim=-1), dim=-1)
-                total_loss += loss.mean()
-                n_loss_terms += 1
-        total_loss /= n_loss_terms
+                loss = torch.sum(-q * F.log_softmax(student_out[v], dim=-1), dim=-1).mean()
+                if self.l2o and student_detached is not None:
+                    loss_det = torch.sum(-q * F.log_softmax(student_det[v], dim=-1), dim=-1).mean()
+                    total_loss_head += loss_det
+                    n_loss_head += 1
+
+                if self.l2o and v % div != 11:
+                    total_loss_low += loss
+                    n_loss_low += 1
+                else:
+                    total_loss_out += loss
+                    n_loss_out += 1
+
+        if self.l2o and n_loss_head > 0 and n_loss_low > 0:
+            total_loss_low /= n_loss_low
+            total_loss_head /= n_loss_head
+            total_loss_head *= 12
+        total_loss_out /= n_loss_out
+        total_loss = total_loss_out + total_loss_low + total_loss_head
         self.update_center(teacher_output)
-        return total_loss * 12
+        return total_loss
 
     @torch.no_grad()
     def update_center(self, teacher_output):

@@ -52,7 +52,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 
 class Tuner(pl.LightningModule):
-    def __init__(self, model, embed_dim, total_batch_size, lr=0.001):
+    def __init__(self, model, embed_dim, total_batch_size, length, lr=0.001):
         super().__init__()
 
         self.model = model
@@ -66,11 +66,15 @@ class Tuner(pl.LightningModule):
 
         self.optim = torch.optim.SGD(
             self.fc.parameters(),
-            lr * 4096 / 256.,  # linear scaling rule
+            lr * total_batch_size / 256.,  # linear scaling rule
             momentum=0.9,
             weight_decay=0,  # we do not apply weight decay
         )
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optim, 100, eta_min=0)
+        self.scheduler = utils.cosine_scheduler(
+            lr * total_batch_size / 256.,
+            0,
+            100, length
+        )
 
         # self.optim = LARS(self.optim, eps=0.0)
 
@@ -82,6 +86,10 @@ class Tuner(pl.LightningModule):
 
         self.criterion = nn.CrossEntropyLoss()
         self.best = 0.0
+
+    def on_after_backward(self):
+        for i, param_group in enumerate(self.optim.param_groups):
+            param_group["lr"] = self.scheduler[self.global_step]
 
     def forward(self, x, labels):
         # with torch.no_grad():
@@ -105,12 +113,7 @@ class Tuner(pl.LightningModule):
         return np.sum(pred_flat == labels_flat) / len(labels_flat)
 
     def configure_optimizers(self):
-        return [self.optim], [{
-            'scheduler': self.scheduler,
-            'interval': 'step',
-            'frequency': 1,
-            'reduce_on_plateau': False,
-        }]
+        return [self.optim]
 
     def training_step(self, batch, _):
         x, label = batch

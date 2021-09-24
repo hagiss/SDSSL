@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 import torchvision.datasets as datasets
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 import argparse
 import torch.nn.functional as F
 from einops import repeat
@@ -16,9 +16,11 @@ from torchvision import models as torchvision_models
 import utils
 import json
 import math
+import numpy as np
 import vision_transformer as vits
 from byol_pytorch import NetWrapper
 import fine_tune
+import sys
 
 from PIL import Image
 
@@ -46,21 +48,30 @@ class RandomApply(nn.Module):
 def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
-    return (2 - 2 * (x * y).sum(dim=-1)).mean()
+    return 2 - 2 * (x * y).sum(dim=-1)
 
 
 class PLLearner(pl.LightningModule):
-    def __init__(self, student, length, val_loader, embed_dim, args):
+    def __init__(self, student, teacher, length, val_loader, embed_dim, args):
         super().__init__()
         # self.save_hyperparameters()
         self.ratio = args.ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
-        self.temperature = args.temperature
+
+        teacher.load_state_dict(student.state_dict())
 
         self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
+        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter)
 
-        print(f"Student is built: {args.arch} network.")
+        if self.st_inter != self.t_inter:
+            self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
+        else:
+            self.teacher.projector.load_state_dict(self.student.projector.state_dict())
+
+        for p in self.teacher.parameters():
+            p.requires_grad = False
+        print(f"Student and Teacher are built: they are both {args.arch} network.")
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
@@ -90,6 +101,8 @@ class PLLearner(pl.LightningModule):
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
+        self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
+                                                        args.epochs, length)
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
@@ -112,11 +125,6 @@ class PLLearner(pl.LightningModule):
         )
 
         self.aug2 = self.aug1
-        self.criterion = nn.CrossEntropyLoss()
-
-        self.labels = None
-        self.label = None
-        self.mask = None
 
         # self.fp16_scaler = None
         # if args.use_fp16:
@@ -127,71 +135,32 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.student(image_one), self.student(image_two)
-
-    def info_nce_loss(self, features):
-        if self.labels is None:
-            b, _ = features.shape
-            self.labels = torch.cat([torch.arange(b/2) for i in range(2)], dim=0)
-            self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
-            self.labels.to(self.device)
-
-        features = F.normalize(features, dim=1)
-
-        similarity_matrix = torch.matmul(features, features.T)
-
-        if self.mask is None:
-            self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool, device=self.device)
-        labels = self.labels[~self.mask].view(self.labels.shape[0], -1)
-        similarity_matrix = similarity_matrix[~self.mask].view(similarity_matrix.shape[0], -1)
-
-        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
-
-        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
-
-        logits = torch.cat([positives, negatives], dim=1)
-        if self.label is None:
-            self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
-
-        logits = logits / self.temperature
-        return self.criterion(logits, self.label)
-
-    def info_nce_loss_intermediate(self, layer_features, output):
-        b = layer_features.shape[0]
-
-        labels = torch.cat([torch.arange(b/11, dtype=torch.long, device=self.device) for _ in range(11)], dim=0)
-
-        layer_features = F.normalize(layer_features, dim=1)
-        output = F.normalize(output, dim=1).detach()
-
-        similarity_matrix = torch.matmul(layer_features, output.T)
-
-        logits = similarity_matrix / 0.1
-        loss = self.criterion(logits, labels)
-        return loss
+        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
         batch_size = images.shape[0]
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        student_output1, student_output2 = self.forward(images)
+        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
-        # if self.st_inter != self.t_inter:
-        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
-
-        loss_mid = 0.0
         if self.st_inter != self.t_inter:
+            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
+
+        if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2) + self.info_nce_loss_intermediate(student_mid2, student_output1)
-        loss_output = self.info_nce_loss(torch.cat((student_output1, student_output2), dim=0))
-        if self.ratio > 0:
-            ratio = self.ratio
+            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+            loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
+            loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
+            loss = loss_output + self.ratio * loss_mid
         else:
-            ratio = 11
-        loss = loss_output + ratio*loss_mid
+            loss = loss_fn(student_output1, teacher_output1).mean()
+            loss += loss_fn(student_output2, teacher_output2).mean()
+            if self.st_inter:
+                loss *= 12
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -204,26 +173,27 @@ class PLLearner(pl.LightningModule):
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    # def on_before_zero_grad(self, _):
-    #     m = self.momentum_schedule[self.global_step]
-    #     for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
-    #         old_weight, up_weight = ma_params.data, current_params.data
-    #         ma_params.data = old_weight * m + (1 - m) * up_weight
-    #
-    #     if self.st_inter != self.t_inter:
-    #         for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
-    #             old_weight, up_weight = ma_params.data, current_params.data
-    #             ma_params.data = old_weight * m + (1 - m) * up_weight
-    #     else:
-    #         for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
-    #             old_weight, up_weight = ma_params.data, current_params.data
-    #             ma_params.data = old_weight * m + (1 - m) * up_weight
+    def on_before_zero_grad(self, _):
+        m = self.momentum_schedule[self.global_step]
+        for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
+            old_weight, up_weight = ma_params.data, current_params.data
+            ma_params.data = old_weight * m + (1 - m) * up_weight
+
+        if self.st_inter != self.t_inter:
+            for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
+        else:
+            for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
+        # torch.cuda.empty_cache()
         x, label = batch
 
-        features = self.student.get_representation(x).detach().cpu()
+        features = self.teacher.get_representation(x).detach().cpu()
         return {'features': features, 'labels': label}
 
     @torch.no_grad()
@@ -255,8 +225,8 @@ class PLLearner(pl.LightningModule):
         # print(len(self.val_loader))
 
         for batch in self.val_loader:
-            features = self.student.get_representation(batch[0].to(self.device))
-            features = F.normalize(features, dim=1)
+            features = self.teacher.get_representation(batch[0].to(self.device))
+            features = F.normalize(features, dim=1)#.cpu()
             # print("features", features)
             targets = batch[1].to(self.device)
             # print(targets)
@@ -306,6 +276,7 @@ class PLLearner(pl.LightningModule):
         self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
 
+
 # class Monitor(pl.Callback):
 #     def on_train_batch_start(self, pl_trainer, pl_module, batch, batch_idx, dataloader_idx):
 #         if batch_idx % 100 == 0:
@@ -323,6 +294,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 total_acc_t1 = []
 total_acc_t5 = []
+
 
 def main(args):
     dataset = None
@@ -383,15 +355,17 @@ def main(args):
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
+        # Subset(dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
+        pin_memory=True,
     )
-    fine_loader = DataLoader(
+    fine_loader1 = DataLoader(
         fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
-        batch_size=512,
+        # Subset(fine_dataset, np.arange(1024)),
+        batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
@@ -400,17 +374,21 @@ def main(args):
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
+        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         dataset_val,
+        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     print("loaded dataset!")
 
@@ -419,12 +397,12 @@ def main(args):
             patch_size=args.patch_size,
             drop_path_rate=0.1,  # stochastic depth
         )
-        # teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
         student = torchvision_models.__dict__[args.arch]()
-        # teacher = torchvision_models.__dict__[args.arch]()
+        teacher = torchvision_models.__dict__[args.arch]()
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
@@ -434,61 +412,48 @@ def main(args):
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
-    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu * args.multi_node
+    total_batch = torch.cuda.device_count() * args.batch_size_per_gpu * args.multi_node
     clip = args.clip_grad
 
     args.image_size = image_size
     args.total_batch = total_batch
 
-    learner = PLLearner(student, len(data_loader), val_loader, embed_dim, args)
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
+                                             student=student,
+                                             teacher=teacher,
+                                             length=len(data_loader),
+                                             val_loader=val_loader,
+                                             embed_dim=embed_dim,
+                                             args=args)
 
-    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
+    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    trainer = pl.Trainer(
-        gpus=torch.cuda.device_count(),
-        max_epochs=args.max_epochs,
-        default_root_dir="output/vit.model",
-        accelerator=args.accelerator,
-        logger=logger,
-        num_sanity_val_steps=0,
-        gradient_clip_val=args.clip_grad,
-        accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=args.val_interval,
-        sync_batchnorm=True,
-        callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
-    )
 
-    trainer.fit(learner, data_loader, train_loader)
-
-    if utils.get_rank() == 0:
-        print("top1", total_acc_t1)
-        print("best top1", max(total_acc_t1))
-        print("top5", total_acc_t5)
-        print("best top5", max(total_acc_t5))
-
-    learner.student.eval()
-
-    total_batch /= args.accumulate
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, 0.02)
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.02)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
         default_root_dir="output/vit.model",
-        accelerator="ddp",
-        # logger=logger,
+        accelerator=args.accelerator,
+        logger=logger,
         num_sanity_val_steps=0,
-        # accumulate_grad_batches=args.accumulate,
+        # accumulate_grad_batches=1,
         check_val_every_n_epoch=10,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
         progress_bar_refresh_rate=0
     )
-    fine_trainer.fit(tuner, fine_loader, val_loader)
+    fine_trainer.fit(tuner, fine_loader1, val_loader)
+    fine_trainer.current_epoch += 1
+    fine_trainer.max_epochs += 100
+    fine_trainer.global_step = 0
+
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.01)
+    fine_trainer.fit(tuner, fine_loader1, val_loader)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='simclr')
+    parser = argparse.ArgumentParser(description='byol')
 
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
@@ -505,7 +470,7 @@ if __name__ == '__main__':
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
-    parser.add_argument('--temperature', default=0.1, type=float, help='temperature for infoNCE')
+    parser.add_argument('--l2o', default=False, type=bool, help='layer2output')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')

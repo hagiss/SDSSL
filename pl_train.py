@@ -12,6 +12,7 @@ from torch import nn
 import random
 import torch.distributed as dist
 from torchvision import models as torchvision_models
+from pytorch_lightning.trainer.states import TrainerState
 
 import utils
 import json
@@ -168,8 +169,14 @@ class PLLearner(pl.LightningModule):
         if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            # student_pred_mid1, _ = torch.split(student_output_pred1, [batch_size * 11, batch_size], dim=0)
+            # student_pred_mid2, _ = torch.split(student_output_pred2, [batch_size * 11, batch_size], dim=0)
             teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
             teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+
+            # loss_pred = loss_fn(student_pred_mid1, teacher_mid1).mean() + loss_fn(student_pred_mid2, teacher_mid2).mean()
+            # loss_pred *= 10
+
             loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
             loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
             loss = loss_output + self.ratio * loss_mid
@@ -387,7 +394,7 @@ def main(args):
     fine_loader = DataLoader(
         fine_dataset,
         # Subset(fine_dataset, np.arange(64)),
-        batch_size=512,
+        batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
@@ -466,7 +473,8 @@ def main(args):
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.005)
+    total_batch /= args.accumulate
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -481,9 +489,6 @@ def main(args):
         progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader, val_loader)
-
-    tuner2 = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.008)
-    fine_trainer.fit(tuner2, fine_loader, val_loader)
 
 
 if __name__ == '__main__':

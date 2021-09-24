@@ -392,7 +392,7 @@ def main(args):
     fine_loader = DataLoader(
         fine_dataset,
         # Subset(fine_dataset, np.arange(64)),
-        batch_size=512,
+        batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
@@ -471,7 +471,8 @@ def main(args):
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.005)
+    total_batch /= args.accumulate
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -486,9 +487,6 @@ def main(args):
         progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader, val_loader)
-
-    tuner2 = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.008)
-    fine_trainer.fit(tuner2, fine_loader, val_loader)
 
 
 if __name__ == '__main__':

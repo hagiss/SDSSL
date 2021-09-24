@@ -225,8 +225,10 @@ class VisionTransformer(nn.Module):
 
         return self.pos_drop(x)
 
-    def forward(self, x):
-        x = self.prepare_tokens(x).detach()
+    def forward(self, x, dino=False):
+        x = self.prepare_tokens(x)
+        if dino is False:
+            x = x.detach()
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
@@ -241,8 +243,10 @@ class VisionTransformer(nn.Module):
                 # return attention of the last block
                 return blk(x, return_attention=True)
 
-    def get_intermediate_layers(self, x, n=1):
+    def get_intermediate_layers(self, x, n=1, dino=False):
         x = self.prepare_tokens(x)
+        if dino is False:
+            x = x.detach()
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
@@ -394,6 +398,7 @@ class StudentDINOHead(nn.Module):
         for i, (mlp, last_layer) in enumerate(zip(self.layers, self.last_layers)):
             ret.append(last_layer(nn.functional.normalize(mlp(x[i, :]))))
         ret = torch.cat(ret)
+
         # ret = rearrange(ret, 'b d e -> (b d) e')
         # last = []
         # for i, last_layer in enumerate(self.last_layers):

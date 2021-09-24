@@ -27,5 +27,5 @@
   "use_bn_in_head": false,
   "dataset": "imagenet",
   "name": "dino",
-  "l2o": true
+  "l2o": false
 }

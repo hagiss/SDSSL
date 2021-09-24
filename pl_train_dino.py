@@ -46,16 +46,25 @@ class PLLearner(pl.LightningModule):
         super().__init__()
 
         self.freeze_last_layer = args.freeze_last_layer
+        self.l2o = args.l2o
 
         teacher.load_state_dict(student.state_dict())
 
-        self.student = utils.MultiCropWrapper(student, StudentDINOHead(
-            embed_dim,
-            args.out_dim,
-            use_bn=False,
-            norm_last_layer=args.norm_last_layer,
-            nlayers=2,
-        ), True)
+        if self.l2o is True:
+            self.student = utils.MultiCropWrapper(student, StudentDINOHead(
+                embed_dim,
+                args.out_dim,
+                use_bn=False,
+                norm_last_layer=args.norm_last_layer,
+                nlayers=2,
+            ), True)
+        else:
+            self.student = utils.MultiCropWrapper(student, DINOHead(
+                embed_dim,
+                args.out_dim,
+                use_bn=args.use_bn_in_head,
+                norm_last_layer=args.norm_last_layer,
+            ))
         self.teacher = utils.MultiCropWrapper(
             teacher,
             DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
@@ -63,10 +72,12 @@ class PLLearner(pl.LightningModule):
 
         # self.teacher_without_ddp = self.teacher
 
-        self.teacher.head.mlp.load_state_dict(self.student.head.layers[-1].state_dict())
-        self.teacher.head.last_layer.load_state_dict(self.student.head.last_layers[-1].state_dict())
-        # self.teacher.head.mlp.load_state_dict(self.student.head.mlp.state_dict())
-        # self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer.state_dict())
+        if self.l2o is True:
+            self.teacher.head.mlp.load_state_dict(self.student.head.layers[-1].state_dict())
+            self.teacher.head.last_layer.load_state_dict(self.student.head.last_layers[-1].state_dict())
+        else:
+            self.teacher.head.mlp.load_state_dict(self.student.head.mlp.state_dict())
+            self.teacher.head.last_layer.load_state_dict(self.student.head.last_layer.state_dict())
 
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -79,6 +90,7 @@ class PLLearner(pl.LightningModule):
             args.teacher_temp,
             args.warmup_teacher_temp_epochs,
             args.epochs,
+            l2o=args.l2o
         )
 
         # ============ preparing optimizer ... ============
@@ -115,9 +127,6 @@ class PLLearner(pl.LightningModule):
         if args.use_fp16:
             self.fp16_scaler = torch.cuda.amp.GradScaler()
 
-        # self.i = 0
-        # self.j = 1
-
     def configure_optimizers(self):
         return [self.optimizer]
 
@@ -125,21 +134,19 @@ class PLLearner(pl.LightningModule):
         return self.teacher(x[:2]), self.student(x)
 
     def training_step(self, batch, batch_idx):
-        # if self.i != self.j:
-        #     self.student.head.dummy_last_layer.load_state_dict(self.student.head.last_layer.state_dict())
-        #     self.i += 1
-
         images = batch[0]
 
         with torch.cuda.amp.autocast(self.fp16_scaler is not None):
             teacher_output, student_output = self.forward(images)
-            loss = self.loss(student_output, teacher_output, self.current_epoch)
+            student_detached = None
+            if self.l2o:
+                student_output, student_detached = student_output
+            loss = self.loss(student_output, teacher_output, self.current_epoch, student_detached)
             self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
         return {'loss': loss}
 
     def on_after_backward(self):
-        # self.j += 1
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
@@ -153,12 +160,21 @@ class PLLearner(pl.LightningModule):
         for current_params, ma_params in zip(self.student.backbone.parameters(), self.teacher.backbone.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
             ma_params.data = old_weight * m + (1 - m) * up_weight
-        for current_params, ma_params in zip(self.student.head.layers[-1].parameters(), self.teacher.head.mlp.parameters()):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = old_weight * m + (1 - m) * up_weight
-        for current_params, ma_params in zip(self.student.head.last_layers[-1].parameters(), self.teacher.head.last_layer.parameters()):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = old_weight * m + (1 - m) * up_weight
+
+        if self.l2o is True:
+            for current_params, ma_params in zip(self.student.head.layers[-1].parameters(), self.teacher.head.mlp.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
+            for current_params, ma_params in zip(self.student.head.last_layers[-1].parameters(), self.teacher.head.last_layer.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
+        else:
+            for current_params, ma_params in zip(self.student.head.mlp.parameters(), self.teacher.head.mlp.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
+            for current_params, ma_params in zip(self.student.head.last_layer.parameters(), self.teacher.head.last_layer.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
 
 
     @torch.no_grad()
@@ -385,8 +401,8 @@ if __name__ == '__main__':
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
         fine_dataset = datasets.STL10(args.data, split='train', download=True, transform=fine_transform)
     elif args.dataset == "imagenet":
-        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
-        path = '/dataset'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = '/dataset'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -431,7 +447,7 @@ if __name__ == '__main__':
     fine_loader = DataLoader(
         fine_dataset,
         # Subset(fine_dataset, np.arange(64)),
-        batch_size=512,
+        batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
@@ -464,12 +480,12 @@ if __name__ == '__main__':
         default_root_dir="output/vit.model",
         accelerator='ddp',
         logger=logger,
-        num_sanity_val_steps=2,
+        num_sanity_val_steps=0,
         gradient_clip_val=args.clip_grad,
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
+        # progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
@@ -480,9 +496,9 @@ if __name__ == '__main__':
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
+    total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.005)
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -497,6 +513,3 @@ if __name__ == '__main__':
         progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader, val_loader)
-
-    tuner2 = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.008)
-    fine_trainer.fit(tuner2, fine_loader, val_loader)
