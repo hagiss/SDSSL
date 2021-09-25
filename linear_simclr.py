@@ -458,7 +458,7 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.03)
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.05)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,

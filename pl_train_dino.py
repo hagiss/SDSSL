@@ -496,20 +496,20 @@ if __name__ == '__main__':
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    # total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
-    #
-    # tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
-    # fine_trainer = pl.Trainer(
-    #     gpus=torch.cuda.device_count(),
-    #     max_epochs=100,
-    #     default_root_dir="output/vit.model",
-    #     accelerator="ddp",
-    #     # logger=logger,
-    #     num_sanity_val_steps=0,
-    #     # accumulate_grad_batches=args.accumulate,
-    #     check_val_every_n_epoch=10,
-    #     sync_batchnorm=True,
-    #     callbacks=[lr_monitor],
-    #     progress_bar_refresh_rate=0
-    # )
-    # fine_trainer.fit(tuner, fine_loader, val_loader)
+    total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
+
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
+    fine_trainer = pl.Trainer(
+        gpus=torch.cuda.device_count(),
+        max_epochs=100,
+        default_root_dir="output/vit.model",
+        accelerator="ddp",
+        # logger=logger,
+        num_sanity_val_steps=0,
+        # accumulate_grad_batches=args.accumulate,
+        check_val_every_n_epoch=10,
+        sync_batchnorm=True,
+        callbacks=[lr_monitor],
+        progress_bar_refresh_rate=0
+    )
+    fine_trainer.fit(tuner, fine_loader, val_loader)
