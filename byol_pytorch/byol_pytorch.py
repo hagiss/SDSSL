@@ -5,24 +5,47 @@ from einops import rearrange, repeat
 
 # MLP class for projector and predictor
 class MLP(nn.Module):
-    def __init__(self, dim, projection_size, hidden_size=4096):
+    def __init__(self, num_layers, dim, projection_size, hidden_size=4096, last_bn=True):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, hidden_size),
-            # nn.BatchNorm1d(hidden_size),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_size, projection_size)
-        )
+        mlp = []
+        for l in range(num_layers):
+            dim1 = dim if l == 0 else hidden_size
+            dim2 = projection_size if l == num_layers - 1 else hidden_size
+
+            mlp.append(nn.Linear(dim1, dim2, bias=False))
+
+            if l < num_layers - 1:
+                mlp.append(nn.BatchNorm1d(dim2))
+                mlp.append(nn.ReLU(inplace=True))
+            elif last_bn:
+                # follow SimCLR's design: https://github.com/google-research/simclr/blob/master/model_util.py#L157
+                # for simplicity, we further removed gamma in BN
+                mlp.append(nn.BatchNorm1d(dim2, affine=False))
+
+        self.net = nn.Sequential(*mlp)
 
     def forward(self, x):
         return self.net(x)
 
 
+class MLP_BYOL(nn.Module):
+    def __init__(self, dim, projection_size, hidden_size = 4096):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden_size, bias=True),
+            nn.BatchNorm1d(hidden_size),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_size, projection_size, bias=True)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 # a wrapper class for the base neural network
 # will manage the interception of the hidden layer output
 # and pipe it into the projecter and predictor nets
 class NetWrapper(nn.Module):
-    def __init__(self, net, embed_size, args, prediction=False, intermediate=False):
+    def __init__(self, net, embed_size, args, prediction=False, intermediate=False, byol=False):
         super().__init__()
         self.net = net
         self.intermediate = intermediate
@@ -37,9 +60,9 @@ class NetWrapper(nn.Module):
         self.up = args.up
 
         if intermediate is False:
-            self.projector = MLP(embed_size, args.out_dim, args.mlp_hidden)
+            self.projector = MLP(3, embed_size, args.out_dim, args.mlp_hidden) if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
             if prediction:
-                self.predictor = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
+                self.predictor = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)  if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
 
         else:
             self.projector = nn.ModuleList([])
@@ -48,11 +71,11 @@ class NetWrapper(nn.Module):
                 self.predictor = nn.ModuleList([])
 
             for i in range(12):
-                mlp = MLP(embed_size, args.out_dim, args.mlp_hidden)
+                mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden) if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
                 self.projector.append(mlp)
 
                 if prediction:
-                    mlp2 = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
+                    mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden) if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):

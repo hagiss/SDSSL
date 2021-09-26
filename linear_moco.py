@@ -61,7 +61,7 @@ class PLLearner(pl.LightningModule):
 
         teacher.load_state_dict(student.state_dict())
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
+        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter)
         self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter)
 
         if self.st_inter != self.t_inter:

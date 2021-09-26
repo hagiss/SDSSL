@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 import argparse
 import torch.nn.functional as F
 from einops import repeat
+from PIL import ImageFilter, ImageOps
 
 from torchvision import transforms as T
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -41,6 +42,25 @@ class RandomApply(nn.Module):
         if random.random() > self.p:
             return x
         return self.fn(x)
+
+
+class GaussianBlur(object):
+    """Gaussian blur augmentation from SimCLR: https://arxiv.org/abs/2002.05709"""
+
+    def __init__(self, sigma=[.1, 2.]):
+        self.sigma = sigma
+
+    def __call__(self, x):
+        sigma = random.uniform(self.sigma[0], self.sigma[1])
+        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
+        return x
+
+
+class Solarize(object):
+    """Solarize augmentation from BYOL: https://arxiv.org/abs/2006.07733"""
+
+    def __call__(self, x):
+        return ImageOps.solarize(x)
 
 
 def loss_fn(x, y):
@@ -95,23 +115,42 @@ class PLLearner(pl.LightningModule):
         self.val_loader = val_loader
 
         self.aug1 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size)),
             RandomApply(
-                T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
                 p=0.3
             ),
             T.RandomGrayscale(p=0.2),
             T.RandomHorizontalFlip(),
             RandomApply(
-                T.GaussianBlur((3, 3), (1.0, 2.0)),
-                p=0.2
+                GaussianBlur([.1, 2.]),
+                p=1.0
             ),
-            T.RandomResizedCrop((args.image_size, args.image_size)),
             T.Normalize(
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
 
-        self.aug2 = self.aug1
+        self.aug2 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size)),
+            RandomApply(
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
+                p=0.3
+            ),
+            T.RandomGrayscale(p=0.2),
+            T.RandomHorizontalFlip(),
+            RandomApply(
+                GaussianBlur([.1, 2.]),
+                p=0.1
+            ),
+            RandomApply(
+                Solarize(),
+                p=0.2
+            ),
+            T.Normalize(
+                mean=torch.tensor([0.485, 0.456, 0.406]),
+                std=torch.tensor([0.229, 0.224, 0.225])),
+        )
         self.criterion = nn.CrossEntropyLoss()
 
         self.labels = None
