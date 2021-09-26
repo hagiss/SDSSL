@@ -12,7 +12,6 @@ from torch import nn
 import random
 import torch.distributed as dist
 from torchvision import models as torchvision_models
-from PIL import ImageFilter, ImageOps
 
 import utils
 import json
@@ -42,25 +41,6 @@ class RandomApply(nn.Module):
         if random.random() > self.p:
             return x
         return self.fn(x)
-
-
-class GaussianBlur(object):
-    """Gaussian blur augmentation from SimCLR: https://arxiv.org/abs/2002.05709"""
-
-    def __init__(self, sigma=[.1, 2.]):
-        self.sigma = sigma
-
-    def __call__(self, x):
-        sigma = random.uniform(self.sigma[0], self.sigma[1])
-        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
-        return x
-
-
-class Solarize(object):
-    """Solarize augmentation from BYOL: https://arxiv.org/abs/2006.07733"""
-
-    def __call__(self, x):
-        return ImageOps.solarize(x)
 
 
 def loss_fn(x, y):
@@ -126,7 +106,7 @@ class PLLearner(pl.LightningModule):
         self.val_loader = val_loader
 
         self.aug1 = torch.nn.Sequential(
-            T.RandomResizedCrop((args.image_size, args.image_size)),
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
             RandomApply(
                 T.ColorJitter(0.4, 0.4, 0.2, 0.1),
                 p=0.3
@@ -134,7 +114,7 @@ class PLLearner(pl.LightningModule):
             T.RandomGrayscale(p=0.2),
             T.RandomHorizontalFlip(),
             RandomApply(
-                GaussianBlur([.1, 2.]),
+                T.GaussianBlur(23, [.1, 2.]),
                 p=1.0
             ),
             T.Normalize(
@@ -143,7 +123,7 @@ class PLLearner(pl.LightningModule):
         )
 
         self.aug2 = torch.nn.Sequential(
-            T.RandomResizedCrop((args.image_size, args.image_size)),
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
             RandomApply(
                 T.ColorJitter(0.4, 0.4, 0.2, 0.1),
                 p=0.3
@@ -151,13 +131,10 @@ class PLLearner(pl.LightningModule):
             T.RandomGrayscale(p=0.2),
             T.RandomHorizontalFlip(),
             RandomApply(
-                GaussianBlur([.1, 2.]),
+                T.GaussianBlur(23, [.1, 2.]),
                 p=0.1
             ),
-            RandomApply(
-                Solarize(),
-                p=0.2
-            ),
+            T.RandomSolarize(130, 0.2),
             T.Normalize(
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
@@ -214,7 +191,8 @@ class PLLearner(pl.LightningModule):
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
-
+        student_output1, student_detached1 = student_output1
+        student_output2, student_detached2 = student_output2
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
         #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 

@@ -28,24 +28,11 @@ class MLP(nn.Module):
         return self.net(x)
 
 
-class MLP_BYOL(nn.Module):
-    def __init__(self, dim, projection_size, hidden_size = 4096):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, hidden_size, bias=True),
-            nn.BatchNorm1d(hidden_size),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_size, projection_size, bias=True)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
 # a wrapper class for the base neural network
 # will manage the interception of the hidden layer output
 # and pipe it into the projecter and predictor nets
 class NetWrapper(nn.Module):
-    def __init__(self, net, embed_size, args, prediction=False, intermediate=False, byol=False):
+    def __init__(self, net, embed_size, args, prediction=False, intermediate=False):
         super().__init__()
         self.net = net
         self.intermediate = intermediate
@@ -60,9 +47,9 @@ class NetWrapper(nn.Module):
         self.up = args.up
 
         if intermediate is False:
-            self.projector = MLP(3, embed_size, args.out_dim, args.mlp_hidden) if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
+            self.projector = MLP(3, embed_size, args.out_dim, args.mlp_hidden)
             if prediction:
-                self.predictor = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)  if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
+                self.predictor = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)
 
         else:
             self.projector = nn.ModuleList([])
@@ -71,11 +58,11 @@ class NetWrapper(nn.Module):
                 self.predictor = nn.ModuleList([])
 
             for i in range(12):
-                mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden) if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
+                mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden)
                 self.projector.append(mlp)
 
                 if prediction:
-                    mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden) if byol is False else MLP_BYOL(embed_size, args.out_dim, args.mlp_hidden)
+                    mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):
