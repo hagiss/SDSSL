@@ -49,6 +49,20 @@ def loss_fn(x, y):
     return (2 - 2 * (x * y).sum(dim=-1)).mean()
 
 
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    tensors_gather = [torch.ones_like(tensor)
+        for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
+
+
 class PLLearner(pl.LightningModule):
     def __init__(self, student, teacher, length, val_loader, embed_dim, args):
         super().__init__()
@@ -193,6 +207,8 @@ class PLLearner(pl.LightningModule):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
         student_output1, student_detached1 = student_output1
         student_output2, student_detached2 = student_output2
+        teacher_output1 = concat_all_gather(teacher_output1)
+        teacher_output2 = concat_all_gather(teacher_output2)
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
         #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
