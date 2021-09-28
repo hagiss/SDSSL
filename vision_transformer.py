@@ -208,9 +208,11 @@ class VisionTransformer(nn.Module):
         else:
             return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
 
-    def prepare_tokens(self, x):
+    def prepare_tokens(self, x, dino=False):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
+        if dino is False:
+            x = x.detach()
 
         # add the [CLS] token to the embed patch tokens
         cls_tokens = self.cls_token.expand(B, -1, -1)
@@ -226,9 +228,7 @@ class VisionTransformer(nn.Module):
         return self.pos_drop(x)
 
     def forward(self, x, dino=False):
-        x = self.prepare_tokens(x)
-        if dino is False:
-            x = x.detach()
+        x = self.prepare_tokens(x, dino)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
@@ -244,9 +244,7 @@ class VisionTransformer(nn.Module):
                 return blk(x, return_attention=True)
 
     def get_intermediate_layers(self, x, n=1, dino=False):
-        x = self.prepare_tokens(x)
-        if dino is False:
-            x = x.detach()
+        x = self.prepare_tokens(x, dino)
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
