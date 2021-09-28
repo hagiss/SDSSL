@@ -489,7 +489,7 @@ def main(args):
         print("best top5", max(total_acc_t5))
 
     total_batch /= args.accumulate
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader), 0.02)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,

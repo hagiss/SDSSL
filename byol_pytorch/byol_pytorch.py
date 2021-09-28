@@ -27,6 +27,29 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class MLP_wo_batch(nn.Module):
+    def __init__(self, num_layers, dim, projection_size, hidden_size=4096, last_bn=False):
+        super().__init__()
+        mlp = []
+        for l in range(num_layers):
+            dim1 = dim if l == 0 else hidden_size
+            dim2 = projection_size if l == num_layers - 1 else hidden_size
+
+            mlp.append(nn.Linear(dim1, dim2, bias=False))
+
+            if l < num_layers - 1:
+                # mlp.append(nn.BatchNorm1d(dim2))
+                mlp.append(nn.ReLU(inplace=True))
+            elif last_bn:
+                # follow SimCLR's design: https://github.com/google-research/simclr/blob/master/model_util.py#L157
+                # for simplicity, we further removed gamma in BN
+                mlp.append(nn.BatchNorm1d(dim2, affine=False))
+
+        self.net = nn.Sequential(*mlp)
+
+    def forward(self, x):
+        return self.net(x)
+
 
 # a wrapper class for the base neural network
 # will manage the interception of the hidden layer output
@@ -58,11 +81,18 @@ class NetWrapper(nn.Module):
                 self.predictor = nn.ModuleList([])
 
             for i in range(12):
-                mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden)
+                if i == 11:
+                    mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden)
+                else:
+                    mlp = MLP_wo_batch(2, embed_size, args.out_dim, args.mlp_hidden)
+
                 self.projector.append(mlp)
 
                 if prediction:
-                    mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)
+                    if i == 11:
+                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)
+                    else:
+                        mlp2 = MLP_wo_batch(2, args.out_dim, args.out_dim, args.mlp_hidden)
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):
