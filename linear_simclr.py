@@ -477,7 +477,14 @@ def main(args):
     fine_trainer.max_epochs += 100
     fine_trainer.global_step = 0
 
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.01)
+    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.1)
+    fine_trainer.fit(tuner, fine_loader1, val_loader)
+    fine_trainer.current_epoch += 1
+    fine_trainer.max_epochs += 100
+    fine_trainer.global_step = 0
+
+    learner.student.eval()
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.1)
     fine_trainer.fit(tuner, fine_loader1, val_loader)
 
 
