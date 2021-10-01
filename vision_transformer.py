@@ -154,7 +154,7 @@ class VisionTransformer(nn.Module):
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
         # else:
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
-        # self.pos_drop = nn.Dropout(p=drop_rate)
+        self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
@@ -170,6 +170,8 @@ class VisionTransformer(nn.Module):
         # trunc_normal_(self.pos_embed, std=.02)
         # nn.init.normal_(self.cls_token, std=1e-6)
         # self.apply(self._init_weights)
+
+        # weight initialization
         for name, m in self.named_modules():
             if isinstance(m, nn.Linear):
                 if 'qkv' in name:
@@ -179,15 +181,17 @@ class VisionTransformer(nn.Module):
                 else:
                     nn.init.xavier_uniform_(m.weight)
                 nn.init.zeros_(m.bias)
+            elif isinstance(m, (nn.LayerNorm, nn.GroupNorm, nn.BatchNorm2d)):
+                nn.init.zeros_(m.bias)
+                nn.init.ones_(m.weight)
         nn.init.normal_(self.cls_token, std=1e-6)
 
         if isinstance(self.patch_embed, PatchEmbed):
             # xavier_uniform initialization
-            val = math.sqrt(6. / float(3 * reduce(mul, self.patch_embed.patch_size, 1) + self.embed_dim))
+            val = math.sqrt(6. / float(3 * reduce(mul, (self.patch_embed.patch_size, self.patch_embed.patch_size), 1) + self.embed_dim))
             nn.init.uniform_(self.patch_embed.proj.weight, -val, val)
             nn.init.zeros_(self.patch_embed.proj.bias)
 
-            # if stop_grad_conv1:
             self.patch_embed.proj.weight.requires_grad = False
             self.patch_embed.proj.bias.requires_grad = False
 
