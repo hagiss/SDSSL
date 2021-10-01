@@ -55,7 +55,7 @@ class MLP_wo_batch(nn.Module):
 # will manage the interception of the hidden layer output
 # and pipe it into the projecter and predictor nets
 class NetWrapper(nn.Module):
-    def __init__(self, net, embed_size, args, prediction=False, intermediate=False):
+    def __init__(self, net, embed_size, args, prediction=False, intermediate=False, last_bn=True):
         super().__init__()
         self.net = net
         self.intermediate = intermediate
@@ -70,9 +70,9 @@ class NetWrapper(nn.Module):
         self.up = args.up
 
         if intermediate is False:
-            self.projector = MLP(3, embed_size, args.out_dim, args.mlp_hidden)
+            self.projector = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
             if prediction:
-                self.predictor = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)
+                self.predictor = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
 
         else:
             self.projector = nn.ModuleList([])
@@ -82,17 +82,17 @@ class NetWrapper(nn.Module):
 
             for i in range(12):
                 if i == 11:
-                    mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden)
+                    mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
                 else:
-                    mlp = MLP_wo_batch(2, embed_size, args.out_dim, args.mlp_hidden)
+                    mlp = MLP_wo_batch(2, embed_size, args.out_dim, args.mlp_hidden, last_bn)
 
                 self.projector.append(mlp)
 
                 if prediction:
                     if i == 11:
-                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden)
+                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     else:
-                        mlp2 = MLP_wo_batch(2, args.out_dim, args.out_dim, args.mlp_hidden)
+                        mlp2 = MLP_wo_batch(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):
