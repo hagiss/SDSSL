@@ -123,7 +123,7 @@ class PatchEmbed(nn.Module):
         super().__init__()
         num_patches = (img_size // patch_size) * (img_size // patch_size)
         self.img_size = img_size
-        self.patch_size = patch_size
+        self.patch_size = (patch_size, patch_size)
         self.num_patches = num_patches
 
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
@@ -148,12 +148,12 @@ class VisionTransformer(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.dis_token = None
-        # if dis_token:
-        #     self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        #     print("Use distillation token!!")
-        #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
-        # else:
-        #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        if dis_token:
+            self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+            print("Use distillation token!!")
+            self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
+        else:
+            self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
@@ -195,23 +195,23 @@ class VisionTransformer(nn.Module):
             self.patch_embed.proj.weight.requires_grad = False
             self.patch_embed.proj.bias.requires_grad = False
 
-    def build_2d_sincos_position_embedding(self, temperature=10000.):
-        h, w = self.patch_embed.patch_size
-        grid_w = torch.arange(w, dtype=torch.float32)
-        grid_h = torch.arange(h, dtype=torch.float32)
-        grid_w, grid_h = torch.meshgrid(grid_w, grid_h)
-        assert self.embed_dim % 4 == 0, 'Embed dimension must be divisible by 4 for 2D sin-cos position embedding'
-        pos_dim = self.embed_dim // 4
-        omega = torch.arange(pos_dim, dtype=torch.float32) / pos_dim
-        omega = 1. / (temperature ** omega)
-        out_w = torch.einsum('m,d->md', [grid_w.flatten(), omega])
-        out_h = torch.einsum('m,d->md', [grid_h.flatten(), omega])
-        pos_emb = torch.cat([torch.sin(out_w), torch.cos(out_w), torch.sin(out_h), torch.cos(out_h)], dim=1)[None, :, :]
-
-        assert self.num_tokens == 1, 'Assuming one and only one token, [cls]'
-        pe_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
-        self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb], dim=1))
-        self.pos_embed.requires_grad = False
+    # def build_2d_sincos_position_embedding(self, temperature=10000.):
+    #     h, w = self.patch_embed.patch_size
+    #     grid_w = torch.arange(w, dtype=torch.float32)
+    #     grid_h = torch.arange(h, dtype=torch.float32)
+    #     grid_w, grid_h = torch.meshgrid(grid_w, grid_h)
+    #     assert self.embed_dim % 4 == 0, 'Embed dimension must be divisible by 4 for 2D sin-cos position embedding'
+    #     pos_dim = self.embed_dim // 4
+    #     omega = torch.arange(pos_dim, dtype=torch.float32) / pos_dim
+    #     omega = 1. / (temperature ** omega)
+    #     out_w = torch.einsum('m,d->md', [grid_w.flatten(), omega])
+    #     out_h = torch.einsum('m,d->md', [grid_h.flatten(), omega])
+    #     pos_emb = torch.cat([torch.sin(out_w), torch.cos(out_w), torch.sin(out_h), torch.cos(out_h)], dim=1)[None, :, :]
+    #
+    #     # assert self.num_tokens == 1, 'Assuming one and only one token, [cls]'
+    #     pe_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
+    #     self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb], dim=1))
+    #     self.pos_embed.requires_grad = False
 
     # def _init_weights(self, m):
     #     if isinstance(m, nn.Linear):
