@@ -486,7 +486,7 @@ def main(args):
     learner.student.eval()
 
     total_batch /= args.accumulate
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader), 0.02)
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader), 0.05)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
