@@ -190,7 +190,7 @@ class VisionTransformer(nn.Module):
 
         if isinstance(self.patch_embed, PatchEmbed):
             # xavier_uniform initialization
-            val = math.sqrt(6. / float(3 * reduce(mul, (self.patch_embed.patch_size, self.patch_embed.patch_size), 1) + self.embed_dim))
+            val = math.sqrt(6. / float(3 * reduce(mul, self.patch_embed.patch_size, 1) + self.embed_dim))
             nn.init.uniform_(self.patch_embed.proj.weight, -val, val)
             nn.init.zeros_(self.patch_embed.proj.bias)
 
