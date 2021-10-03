@@ -178,9 +178,12 @@ class PLLearner(pl.LightningModule):
         loss = self.criterion(logits, labels)
         return 2*tau*loss
 
-    def info_nce_loss_layer(self, s_features, t_features):
+    def info_nce_loss_layer(self, s_features, t_features, d=None):
         batch_size = s_features.shape[0]
-        depth = 11 if self.st_inter != self.t_inter else 1
+        if d is not None:
+            depth = d
+        else:
+            depth = 11 if self.st_inter != self.t_inter else 1
 
         batch_size /= depth
         labels = torch.cat([(torch.arange(batch_size, dtype=torch.long) + int(batch_size * torch.distributed.get_rank())) for _ in range(depth)], dim=0).to(self.device)
@@ -213,15 +216,16 @@ class PLLearner(pl.LightningModule):
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
         #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
-        loss_mid = 0
+        loss_mid, loss_detached = 0, 0
         if self.st_inter != self.t_inter:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
             loss_mid = self.info_nce_loss_layer(student_mid1, teacher_output1) + self.info_nce_loss_layer(student_mid2, teacher_output2)
+            loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
         ratio = self.ratio if self.ratio > 0 else 11
-        loss = loss_output + ratio * loss_mid
+        loss = loss_output + ratio * loss_mid + loss_detached
         # loss = self.info_nce_loss(student_output1, teacher_output1)
         # loss += self.info_nce_loss(student_output2, teacher_output2)
 
@@ -537,7 +541,7 @@ if __name__ == '__main__':
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
-    parser.add_argument('--ratio', default=1, type=int, help='loss ratio of layer2output')
+    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
