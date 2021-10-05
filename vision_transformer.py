@@ -152,7 +152,7 @@ class VisionTransformer(nn.Module):
         self.build_2d_sincos_position_embedding()
         if dis_token:
             self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-            nn.init.normal_(self.cls_token, std=1e-6)
+            nn.init.normal_(self.dis_token, std=1e-6)
             print("Use distillation token!!")
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
         # else:
