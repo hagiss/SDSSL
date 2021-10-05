@@ -84,7 +84,7 @@ class NetWrapper(nn.Module):
                 if i == 11:
                     mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
                 else:
-                    mlp = MLP(2, embed_size, args.out_dim, args.mlp_hidden, last_bn)
+                    mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
 
                 self.projector.append(mlp)
 
@@ -119,6 +119,7 @@ class NetWrapper(nn.Module):
                 # for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
                 for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
                     proj = project(representation[i, :])
+                    # proj_detached = project(representation[i, :].detach())
                     ret.append(predict(proj))
                     ret_pred.append(predict(proj.detach()))
                 ret = torch.cat(ret)

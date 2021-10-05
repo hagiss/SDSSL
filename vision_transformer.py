@@ -150,9 +150,10 @@ class VisionTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.dis_token = None
         self.build_2d_sincos_position_embedding()
-        # if dis_token:
-        #     self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        #     print("Use distillation token!!")
+        if dis_token:
+            self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+            nn.init.normal_(self.cls_token, std=1e-6)
+            print("Use distillation token!!")
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
         # else:
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
@@ -252,6 +253,9 @@ class VisionTransformer(nn.Module):
         # assert self.num_tokens == 1, 'Assuming one and only one token, [cls]'
         pe_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
         self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb], dim=1))
+        if self.dis_token:
+            di_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
+            self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb, di_token], dim=1))
         self.pos_embed.requires_grad = False
 
     def prepare_tokens(self, x, dino=False):
@@ -269,7 +273,7 @@ class VisionTransformer(nn.Module):
             x = torch.cat((cls_tokens, x), dim=1)
 
         # add positional encoding to each token
-        x = x + x + self.pos_embed
+        x = x + self.pos_embed
 
         return self.pos_drop(x)
 

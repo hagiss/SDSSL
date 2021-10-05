@@ -225,7 +225,7 @@ class PLLearner(pl.LightningModule):
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
         ratio = self.ratio if self.ratio > 0 else 11
-        loss = loss_output + ratio * loss_mid + loss_detached
+        loss = loss_output + ratio * loss_mid + 12 * loss_detached
         # loss = self.info_nce_loss(student_output1, teacher_output1)
         # loss += self.info_nce_loss(student_output2, teacher_output2)
 
@@ -459,6 +459,7 @@ def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
+            dis_token=args.dis_token,
             # drop_path_rate=0.1,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
@@ -616,6 +617,7 @@ if __name__ == '__main__':
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
     parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
+    parser.add_argument('--dis_token', default=False, type=bool, help="distillation token")
 
     hparam = parser.parse_args()
     if hparam.load_json:
