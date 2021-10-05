@@ -149,11 +149,12 @@ class VisionTransformer(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.dis_token = None
-        self.build_2d_sincos_position_embedding()
         if dis_token:
             self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
             nn.init.normal_(self.dis_token, std=1e-6)
             print("Use distillation token!!")
+        self.build_2d_sincos_position_embedding()
+
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
         # else:
         #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
@@ -251,11 +252,12 @@ class VisionTransformer(nn.Module):
         pos_emb = torch.cat([torch.sin(out_w), torch.cos(out_w), torch.sin(out_h), torch.cos(out_h)], dim=1)[None, :, :]
 
         # assert self.num_tokens == 1, 'Assuming one and only one token, [cls]'
-        pe_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
+        num_token = 2 if self.dis_token is not None else 1
+        pe_token = torch.zeros([1, num_token, self.embed_dim], dtype=torch.float32)
         self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb], dim=1))
-        if self.dis_token:
-            di_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
-            self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb, di_token], dim=1))
+        # if self.dis_token is not None:
+        #     di_token = torch.zeros([1, 1, self.embed_dim], dtype=torch.float32)
+        #     self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb, di_token], dim=1))
         self.pos_embed.requires_grad = False
 
     def prepare_tokens(self, x, dino=False):
@@ -268,7 +270,7 @@ class VisionTransformer(nn.Module):
         cls_tokens = self.cls_token.expand(B, -1, -1)
         if self.dis_token is not None:
             dis_tokens = self.dis_token.expand(B, -1, -1)
-            x = torch.cat((cls_tokens, x, dis_tokens), dim=1)
+            x = torch.cat((cls_tokens, dis_tokens, x), dim=1)
         else:
             x = torch.cat((cls_tokens, x), dim=1)
 
@@ -301,7 +303,7 @@ class VisionTransformer(nn.Module):
             x = blk(x)
             if len(self.blocks) - i <= n:
                 if i != 11 and self.dis_token is not None:
-                    output.append(self.norm(x)[:, -1])
+                    output.append(self.norm(x)[:, 1])
                 else:
                     output.append(self.norm(x)[:, 0])
 

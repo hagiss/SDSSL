@@ -462,7 +462,7 @@ def main(args):
             dis_token=args.dis_token,
             # drop_path_rate=0.1,  # stochastic depth
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token,)
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
