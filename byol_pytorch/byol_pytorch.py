@@ -143,6 +143,7 @@ class NetWrapper(nn.Module):
                 ret.append(prediction)
 
             return torch.cat(ret)
+        return self.predictor(x)
 
 
     # def forward(self, x, return_embedding=False, epoch=None):

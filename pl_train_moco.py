@@ -93,10 +93,12 @@ class PLLearner(pl.LightningModule):
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
+        params_pred = utils.get_params_groups(self.student.predictor)
         if args.optimizer == "adamw":
             self.optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
         elif args.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
+            self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
 
@@ -160,13 +162,14 @@ class PLLearner(pl.LightningModule):
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
         self.criterion = nn.CrossEntropyLoss()
+        self.automatic_optimization = False
 
         # self.fp16_scaler = None
         # if args.use_fp16:
         #     self.fp16_scaler = torch.cuda.amp.GradScaler()
 
-    def configure_optimizers(self):
-        return [self.optimizer]
+    # def configure_optimizers(self):
+    #     return [self.optimizer]
 
     def info_nce_loss(self, s_features, t_features):
         batch_size = s_features.shape[0]
@@ -213,6 +216,8 @@ class PLLearner(pl.LightningModule):
         images = batch[0]
         batch_size = images.shape[0]
 
+        self.update_lr()
+
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         # projections
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
@@ -236,9 +241,9 @@ class PLLearner(pl.LightningModule):
 
             loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
 
-            opt = self.optimizer
+            opt = self.optimizer_pred
             opt.zero_grad()
-            self.manual_backward(loss_detached)
+            self.manual_backward(12 * loss_detached)
             opt.step()
 
             """compute loss for vit and projector (update predictor slightly)"""
@@ -259,21 +264,36 @@ class PLLearner(pl.LightningModule):
 
         ratio = self.ratio if self.ratio > 0 else 11
         loss = loss_output + ratio * loss_mid
+
+        opt = self.optimizer_pred
+        opt.zero_grad()
+        self.manual_backward(loss)
+        opt.step()
         # loss = self.info_nce_loss(student_output1, teacher_output1)
         # loss += self.info_nce_loss(student_output2, teacher_output2)
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
+        self.momentum_update()
+
         return {'loss': loss}
 
-    def on_after_backward(self):
+    # def on_after_backward(self):
+    def update_lr(self):
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    def on_before_zero_grad(self, _):
+        for i, param_group in enumerate(self.optimizer_pred.param_groups):
+            param_group["lr"] = self.lr_schedule[self.global_step]
+            if i == 0:
+                self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
+                param_group["weight_decay"] = self.wd_schedule[self.global_step]
+
+    # def on_before_zero_grad(self, _):
+    def momentum_update(self):
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
