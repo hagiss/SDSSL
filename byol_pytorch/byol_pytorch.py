@@ -113,40 +113,87 @@ class NetWrapper(nn.Module):
 
         if self.intermediate:
             ret = []
-            if self.predictor is not None:
-                ret_pred = []
-                ret_proj = []
-                representation = rearrange(representation, "(d b) e -> d b e", d=12)
-                # for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
-                for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
-                    proj = project(representation[i, :])
-                    ret_proj.append(proj)
-                    # proj_detached = project(representation[i, :].detach())
-                    ret.append(predict(proj))
-                    ret_pred.append(predict(proj.detach()))
-                ret = torch.cat(ret)
-                ret_pred = torch.cat(ret_pred)
-                ret_proj = torch.cat(ret_proj)
-                # shape: [(d b) e] -> [12*batch, e]
-                return ret, ret_pred, ret_proj
-            else:
-                representation = rearrange(representation, "(d b) e -> d b e", d=12)
-                for i, project in enumerate(self.projector):
-                    ret.append(project(representation[i, :]))
+            representation = rearrange(representation, "(d b) e -> d b e", d=12)
+            for i, project in enumerate(self.projector):
+                ret.append(project(representation[i, :]))
 
-                if self.up > 0:
-                    last = ret[-1].unsqueeze(0)
-                    last = repeat(last, "() b e -> (d b) e", d=self.up)
-                    ret = torch.cat(ret[self.up:])
-                    ret = torch.cat([ret, last])
-                else:
-                    ret = torch.cat(ret)
-                # shape: [(d b) e] -> [12*batch, e]
+            if self.up > 0:
+                last = ret[-1].unsqueeze(0)
+                last = repeat(last, "() b e -> (d b) e", d=self.up)
+                ret = torch.cat(ret[self.up:])
+                ret = torch.cat([ret, last])
+            else:
+                ret = torch.cat(ret)
+            # shape: [(d b) e] -> [12*batch, e]
         else:
             ret = self.projector(representation)
-            if self.predictor is not None:
-                ret_pred = self.predictor(ret.detach())
-                ret = self.predictor(ret)
-                return ret, ret_pred
 
         return ret
+
+    # x.shape is [12 * batch, out_dim]
+    def predict(self, x):
+        if self.predictor is None:
+            return x
+
+        if self.intermediate:
+            ret = []
+            projections = rearrange(x, "(d b) e -> d b e", d=12)
+            for i, predictor in enumerate(self.predictor):
+                prediction = predictor(projections[i, :])
+                ret.append(prediction)
+
+            return torch.cat(ret)
+
+
+    # def forward(self, x, return_embedding=False, epoch=None):
+    #     # if self.predictor is not None and return_embedding is False:
+    #     #     representation = self.net.get_intermediate_layers(x, 12)
+    #     # else:
+    #     #     representation = self.net(x)
+    #     if self.intermediate and return_embedding is False:
+    #         representation = self.net.get_intermediate_layers(x, 12)
+    #     else:
+    #         representation = self.net(x)
+    #
+    #     if return_embedding:
+    #         return representation
+    #
+    #     if self.intermediate:
+    #         ret = []
+    #         if self.predictor is not None:
+    #             ret_pred = []
+    #             ret_proj = []
+    #             representation = rearrange(representation, "(d b) e -> d b e", d=12)
+    #             # for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
+    #             for i, (project, predict) in enumerate(zip(self.projector, self.predictor)):
+    #                 proj = project(representation[i, :])
+    #                 ret_proj.append(proj)
+    #                 # proj_detached = project(representation[i, :].detach())
+    #                 ret.append(predict(proj))
+    #                 ret_pred.append(predict(proj.detach()))
+    #             ret = torch.cat(ret)
+    #             ret_pred = torch.cat(ret_pred)
+    #             ret_proj = torch.cat(ret_proj)
+    #             # shape: [(d b) e] -> [12*batch, e]
+    #             return ret, ret_pred, ret_proj
+    #         else:
+    #             representation = rearrange(representation, "(d b) e -> d b e", d=12)
+    #             for i, project in enumerate(self.projector):
+    #                 ret.append(project(representation[i, :]))
+    #
+    #             if self.up > 0:
+    #                 last = ret[-1].unsqueeze(0)
+    #                 last = repeat(last, "() b e -> (d b) e", d=self.up)
+    #                 ret = torch.cat(ret[self.up:])
+    #                 ret = torch.cat([ret, last])
+    #             else:
+    #                 ret = torch.cat(ret)
+    #             # shape: [(d b) e] -> [12*batch, e]
+    #     else:
+    #         ret = self.projector(representation)
+    #         if self.predictor is not None:
+    #             ret_pred = self.predictor(ret.detach())
+    #             ret = self.predictor(ret)
+    #             return ret, ret_pred
+    #
+    #     return ret
