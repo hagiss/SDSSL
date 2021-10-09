@@ -73,7 +73,7 @@ class PLLearner(pl.LightningModule):
     def __init__(self, student, teacher, length, val_loader, embed_dim, args):
         super().__init__()
         # self.save_hyperparameters()
-        self.ratio = args.ratio
+        self.ratio = 0
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
 
@@ -96,6 +96,7 @@ class PLLearner(pl.LightningModule):
         params_pred = utils.get_params_groups(self.student.predictor)
         if args.optimizer == "adamw":
             self.optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
+            self.optimizer_pred = torch.optim.AdamW(params_pred)
         elif args.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
             self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
@@ -116,6 +117,10 @@ class PLLearner(pl.LightningModule):
         self.wd_schedule = utils.cosine_scheduler(
             args.weight_decay,
             args.weight_decay_end,
+            args.epochs, length,
+        )
+        self.ratio_schedule = utils.cosine_scheduler(
+            0, args.ratio,
             args.epochs, length,
         )
 
@@ -241,10 +246,10 @@ class PLLearner(pl.LightningModule):
 
             loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
 
-            opt = self.optimizer_pred
-            opt.zero_grad()
-            self.manual_backward(12 * loss_detached)
-            opt.step()
+            # opt = self.optimizer_pred
+            # opt.zero_grad()
+            # self.manual_backward(12 * loss_detached)
+            # opt.step()
 
             """compute loss for vit and projector (update predictor slightly)"""
             student_output1 = self.student.predict(student_output1)
@@ -262,10 +267,10 @@ class PLLearner(pl.LightningModule):
 
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
-        ratio = self.ratio if self.ratio > 0 else 11
-        loss = loss_output + ratio * loss_mid
+        # ratio = self.ratio if self.ratio > 0 else 11
+        loss = loss_output + self.ratio * loss_mid + 12 * loss_detached
 
-        opt = self.optimizer_pred
+        opt = self.optimizer
         opt.zero_grad()
         self.manual_backward(loss)
         opt.step()
@@ -280,17 +285,18 @@ class PLLearner(pl.LightningModule):
 
     # def on_after_backward(self):
     def update_lr(self):
+        self.ratio = self.ratio_schedule[self.global_step]
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-        for i, param_group in enumerate(self.optimizer_pred.param_groups):
-            param_group["lr"] = self.lr_schedule[self.global_step]
-            if i == 0:
-                self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
-                param_group["weight_decay"] = self.wd_schedule[self.global_step]
+        # for i, param_group in enumerate(self.optimizer_pred.param_groups):
+        #     param_group["lr"] = self.lr_schedule[self.global_step]
+        #     if i == 0:
+        #         self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
+        #         param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
     # def on_before_zero_grad(self, _):
     def momentum_update(self):
