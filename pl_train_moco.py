@@ -259,6 +259,10 @@ class PLLearner(pl.LightningModule):
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
             loss_mid = self.info_nce_loss_layer(student_mid1, teacher_output1) + self.info_nce_loss_layer(student_mid2, teacher_output2)
 
+        else:
+            student_output1 = self.student.predict(student_output1)
+            student_output2 = self.student.predict(student_output2)
+
         # if self.t_inter:
         #     _, student_proj1 = torch.split(student_proj1, [batch_size, 11 * batch_size], dim=0)
         #     _, student_proj2 = torch.split(student_proj2, [batch_size, 11 * batch_size], dim=0)
