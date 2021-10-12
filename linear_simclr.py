@@ -45,10 +45,23 @@ class RandomApply(nn.Module):
         return self.fn(x)
 
 
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    tensors_gather = [torch.ones_like(tensor)
+        for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
+
+
 def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
-    return 2 - 2 * (x * y).sum(dim=-1)
+    return (2 - 2 * (x * y).sum(dim=-1)).mean()
 
 
 class PLLearner(pl.LightningModule):
@@ -89,6 +102,10 @@ class PLLearner(pl.LightningModule):
             args.weight_decay_end,
             args.epochs, length,
         )
+        self.ratio_schedule = utils.cosine_scheduler(
+            0, args.ratio,
+            args.epochs, length,
+        )
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
@@ -97,24 +114,41 @@ class PLLearner(pl.LightningModule):
         self.val_loader = val_loader
 
         self.aug1 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
             RandomApply(
-                T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
                 p=0.3
             ),
             T.RandomGrayscale(p=0.2),
             T.RandomHorizontalFlip(),
             RandomApply(
-                T.GaussianBlur((3, 3), (1.0, 2.0)),
-                p=0.2
+                T.GaussianBlur(23, [.1, 2.]),
+                p=1.0
             ),
-            T.RandomResizedCrop((args.image_size, args.image_size)),
             T.Normalize(
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
 
-        self.aug2 = self.aug1
+        self.aug2 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
+            RandomApply(
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
+                p=0.3
+            ),
+            T.RandomGrayscale(p=0.2),
+            T.RandomHorizontalFlip(),
+            RandomApply(
+                T.GaussianBlur(23, [.1, 2.]),
+                p=0.1
+            ),
+            T.RandomSolarize(130, 0.2),
+            T.Normalize(
+                mean=torch.tensor([0.485, 0.456, 0.406]),
+                std=torch.tensor([0.229, 0.224, 0.225])),
+        )
         self.criterion = nn.CrossEntropyLoss()
+        self.automatic_optimization = False
 
         self.labels = None
         self.label = None
@@ -161,10 +195,12 @@ class PLLearner(pl.LightningModule):
     def info_nce_loss_intermediate(self, layer_features, output):
         b = layer_features.shape[0]
 
-        labels = torch.cat([torch.arange(b/11, dtype=torch.long, device=self.device) for _ in range(11)], dim=0)
+        labels = torch.cat([torch.arange(b/11, dtype=torch.long, device=self.device) + int(b * torch.distributed.get_rank()) for _ in range(11)], dim=0)
+
+        output = concat_all_gather(output)
 
         layer_features = F.normalize(layer_features, dim=1)
-        output = F.normalize(output, dim=1).detach()
+        output = F.normalize(output, dim=1)
 
         similarity_matrix = torch.matmul(layer_features, output.T)
 
@@ -175,6 +211,8 @@ class PLLearner(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         images = batch[0]
         batch_size = images.shape[0]
+
+        self.update_lr()
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         student_output1, student_output2 = self.forward(images)
@@ -187,19 +225,32 @@ class PLLearner(pl.LightningModule):
         if self.st_inter != self.t_inter:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2) + self.info_nce_loss_intermediate(student_mid2, student_output1)
+            print('aaaa')
+            loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2.detach()) + self.info_nce_loss_intermediate(student_mid2, student_output1.detach())
+            print('aaaabbbbbbb')
         loss_output = self.info_nce_loss(torch.cat((student_output1, student_output2), dim=0))
-        if self.ratio > 0:
-            ratio = self.ratio
-        else:
-            ratio = 11
-        loss = loss_output + ratio*loss_mid
+        print('aaaabbbbbbbcccccc')
+        # if self.ratio > 0:
+        #     ratio = self.ratio
+        # else:
+        #     ratio = 11
+        loss = loss_output + self.ratio * loss_mid
+
+        opt = self.optimizer
+        opt.zero_grad()
+        self.manual_backward(loss)
+        opt.step()
+
+        print('loss', loss.detach().item())
+        print('loss_mid', loss_mid.detach().item())
+
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
         return {'loss': loss}
 
-    def on_after_backward(self):
+    def update_lr(self):
+        self.ratio = self.ratio_schedule[self.global_step]
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
@@ -458,7 +509,7 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.05)
+    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), args.lr)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -472,19 +523,6 @@ def main(args):
         callbacks=[lr_monitor],
         progress_bar_refresh_rate=0
     )
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
-    fine_trainer.current_epoch += 1
-    fine_trainer.max_epochs += 100
-    fine_trainer.global_step = 0
-
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.1)
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
-    fine_trainer.current_epoch += 1
-    fine_trainer.max_epochs += 100
-    fine_trainer.global_step = 0
-
-    learner.student.eval()
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.1)
     fine_trainer.fit(tuner, fine_loader1, val_loader)
 
 

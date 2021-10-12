@@ -61,8 +61,8 @@ class PLLearner(pl.LightningModule):
 
         teacher.load_state_dict(student.state_dict())
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter)
-        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter)
+        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter, last_bn=False)
+        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter, last_bn=False)
 
         if self.st_inter != self.t_inter:
             self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
@@ -71,6 +71,8 @@ class PLLearner(pl.LightningModule):
 
         for p in self.teacher.parameters():
             p.requires_grad = False
+        # for p in self.student.dummy_predictor.parameters():
+        #     p.requires_grad = False
         print(f"Student and Teacher are built: they are both {args.arch} network.")
 
         # ============ preparing optimizer ... ============
@@ -98,6 +100,10 @@ class PLLearner(pl.LightningModule):
             args.weight_decay_end,
             args.epochs, length,
         )
+        self.ratio_schedule = utils.cosine_scheduler(
+            0, args.ratio,
+            args.epochs, length,
+        )
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
@@ -106,25 +112,44 @@ class PLLearner(pl.LightningModule):
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
-
         self.aug1 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
             RandomApply(
-                T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
                 p=0.3
             ),
             T.RandomGrayscale(p=0.2),
             T.RandomHorizontalFlip(),
             RandomApply(
-                T.GaussianBlur((3, 3), (1.0, 2.0)),
-                p=0.2
+                T.GaussianBlur(23, [.1, 2.]),
+                p=1.0
             ),
-            T.RandomResizedCrop((args.image_size, args.image_size)),
             T.Normalize(
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
 
-        self.aug2 = self.aug1
+        self.aug2 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
+            RandomApply(
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
+                p=0.3
+            ),
+            T.RandomGrayscale(p=0.2),
+            T.RandomHorizontalFlip(),
+            RandomApply(
+                T.GaussianBlur(23, [.1, 2.]),
+                p=0.1
+            ),
+            T.RandomSolarize(130, 0.2),
+            T.Normalize(
+                mean=torch.tensor([0.485, 0.456, 0.406]),
+                std=torch.tensor([0.229, 0.224, 0.225])),
+        )
+        self.i = 0
+        self.j = 1
+
+        self.automatic_optimization = False
 
         # self.fp16_scaler = None
         # if args.use_fp16:
@@ -135,24 +160,48 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
+        # student_output1, student_output_pred1 = self.student(image_two)
+        # student_output2, student_output_pred2 = self.student(image_one)
         return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
 
     def training_step(self, batch, batch_idx):
+        # if self.i != self.j:
+        #     self.i += 1
+        #     self.student.dummy_predictor.load_state_dict(self.student.predictor.state_dict())
+
         images = batch[0]
         batch_size = images.shape[0]
 
+
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        # teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
+        loss_pred = 0
         if self.st_inter != self.t_inter:
             teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
             teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
+            student_output_pred1 = self.student.predict(student_output1.detach())
+            student_output_pred2 = self.student.predict(student_output2.detach())
+            loss_pred = loss_fn(student_output_pred1, teacher_output1).mean()
+            loss_pred += loss_fn(student_output_pred2, teacher_output2).mean()
+            loss_pred *= 12
+
+        student_output1 = self.student.predict(student_output1)
+        student_output2 = self.student.predict(student_output2)
+
         if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            # student_pred_mid1, _ = torch.split(student_output_pred1, [batch_size * 11, batch_size], dim=0)
+            # student_pred_mid2, _ = torch.split(student_output_pred2, [batch_size * 11, batch_size], dim=0)
             teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
             teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+
+            # loss_pred = loss_fn(student_pred_mid1, teacher_mid1).mean() + loss_fn(student_pred_mid2, teacher_mid2).mean()
+            # loss_pred *= 10
+
             loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
             loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
             loss = loss_output + self.ratio * loss_mid
@@ -162,18 +211,27 @@ class PLLearner(pl.LightningModule):
             if self.st_inter:
                 loss *= 12
 
+        loss += loss_pred
+
+        opt = self.optimizer
+        opt.zero_grad()
+        self.manual_backward(loss)
+        opt.step()
+
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
         return {'loss': loss}
 
-    def on_after_backward(self):
+    def update_lr(self):
+        self.ratio = self.ratio_schedule[self.global_step]
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    def on_before_zero_grad(self, _):
+    def momentum_update(self, _):
+        # self.j += 1
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
@@ -429,7 +487,9 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.05)
+    model = learner.student if args.student else learner.teacher
+    model.eval()
+    tuner = fine_tune.Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -443,19 +503,6 @@ def main(args):
         callbacks=[lr_monitor],
         progress_bar_refresh_rate=0
     )
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
-    fine_trainer.current_epoch += 1
-    fine_trainer.max_epochs += 100
-    fine_trainer.global_step = 0
-
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.1)
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
-    fine_trainer.current_epoch += 1
-    fine_trainer.max_epochs += 100
-    fine_trainer.global_step = 0
-
-    learner.student.eval()
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.1)
     fine_trainer.fit(tuner, fine_loader1, val_loader)
 
 
@@ -548,6 +595,7 @@ if __name__ == '__main__':
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
     parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
+    parser.add_argument('--student', default=False, type=utils.bool_flag, help='choose student or teacher network')
 
     hparam = parser.parse_args()
     if hparam.load_json:

@@ -20,7 +20,7 @@
   "dataset": "imagenet",
   "name": "byol/vit_base_16_l2o",
   "accelerator": "ddp",
-  "accumulate": 4,
+  "accumulate": 1,
   "val_interval": 20,
   "div": 1,
   "ratio": 1,

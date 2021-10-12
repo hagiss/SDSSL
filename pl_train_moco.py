@@ -93,13 +93,13 @@ class PLLearner(pl.LightningModule):
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
-        params_pred = utils.get_params_groups(self.student.predictor)
+        # params_pred = utils.get_params_groups(self.student.predictor)
         if args.optimizer == "adamw":
             self.optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
-            self.optimizer_pred = torch.optim.AdamW(params_pred)
+            # self.optimizer_pred = torch.optim.AdamW(params_pred)
         elif args.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
-            self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
+            # self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
 
@@ -573,22 +573,22 @@ def main(args):
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    total_batch /= args.accumulate
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader), 0.05)
-    fine_trainer = pl.Trainer(
-        gpus=torch.cuda.device_count(),
-        max_epochs=100,
-        default_root_dir="output/vit.model",
-        accelerator=args.accelerator,
-        # logger=logger,
-        num_sanity_val_steps=0,
-        # accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=10,
-        sync_batchnorm=True,
-        callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
-    )
-    fine_trainer.fit(tuner, fine_loader, val_loader)
+    # total_batch /= args.accumulate
+    # tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader), 0.05)
+    # fine_trainer = pl.Trainer(
+    #     gpus=torch.cuda.device_count(),
+    #     max_epochs=100,
+    #     default_root_dir="output/vit.model",
+    #     accelerator=args.accelerator,
+    #     # logger=logger,
+    #     num_sanity_val_steps=0,
+    #     # accumulate_grad_batches=args.accumulate,
+    #     check_val_every_n_epoch=10,
+    #     sync_batchnorm=True,
+    #     callbacks=[lr_monitor],
+    #     progress_bar_refresh_rate=0
+    # )
+    # fine_trainer.fit(tuner, fine_loader, val_loader)
 
 
 if __name__ == '__main__':

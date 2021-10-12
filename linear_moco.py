@@ -51,11 +51,25 @@ def loss_fn(x, y):
     return 2 - 2 * (x * y).sum(dim=-1)
 
 
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    tensors_gather = [torch.ones_like(tensor)
+        for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
+
+
 class PLLearner(pl.LightningModule):
     def __init__(self, student, teacher, length, val_loader, embed_dim, args):
         super().__init__()
         # self.save_hyperparameters()
-        self.ratio = args.ratio
+        self.ratio = 0
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
 
@@ -75,10 +89,13 @@ class PLLearner(pl.LightningModule):
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
+        # params_pred = utils.get_params_groups(self.student.predictor)
         if args.optimizer == "adamw":
             self.optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
+            # self.optimizer_pred = torch.optim.AdamW(params_pred)
         elif args.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
+            # self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
 
@@ -98,6 +115,10 @@ class PLLearner(pl.LightningModule):
             args.weight_decay_end,
             args.epochs, length,
         )
+        self.ratio_schedule = utils.cosine_scheduler(
+            0, args.ratio,
+            args.epochs, length,
+        )
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
@@ -108,30 +129,85 @@ class PLLearner(pl.LightningModule):
         self.val_loader = val_loader
 
         self.aug1 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
             RandomApply(
-                T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
                 p=0.3
             ),
             T.RandomGrayscale(p=0.2),
             T.RandomHorizontalFlip(),
             RandomApply(
-                T.GaussianBlur((3, 3), (1.0, 2.0)),
-                p=0.2
+                T.GaussianBlur(23, [.1, 2.]),
+                p=1.0
             ),
-            T.RandomResizedCrop((args.image_size, args.image_size)),
             T.Normalize(
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
 
-        self.aug2 = self.aug1
+        self.aug2 = torch.nn.Sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
+            RandomApply(
+                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
+                p=0.3
+            ),
+            T.RandomGrayscale(p=0.2),
+            T.RandomHorizontalFlip(),
+            RandomApply(
+                T.GaussianBlur(23, [.1, 2.]),
+                p=0.1
+            ),
+            T.RandomSolarize(130, 0.2),
+            T.Normalize(
+                mean=torch.tensor([0.485, 0.456, 0.406]),
+                std=torch.tensor([0.229, 0.224, 0.225])),
+        )
+        self.criterion = nn.CrossEntropyLoss()
+        self.automatic_optimization = False
 
         # self.fp16_scaler = None
         # if args.use_fp16:
         #     self.fp16_scaler = torch.cuda.amp.GradScaler()
 
-    def configure_optimizers(self):
-        return [self.optimizer]
+    # def configure_optimizers(self):
+    #     return [self.optimizer]
+
+    def info_nce_loss(self, s_features, t_features):
+        batch_size = s_features.shape[0]
+
+        labels = (torch.arange(batch_size, dtype=torch.long) + int(batch_size * torch.distributed.get_rank())).to(self.device)
+
+        s_features = F.normalize(s_features, dim=1)
+        t_features = F.normalize(t_features, dim=1)
+
+        similarity_matrix = torch.matmul(s_features, t_features.T)
+
+        tau = 0.2
+
+        logits = similarity_matrix / tau
+        loss = self.criterion(logits, labels)
+        return 2*tau*loss
+
+    def info_nce_loss_layer(self, s_features, t_features, d=None):
+        batch_size = s_features.shape[0]
+        if d is not None:
+            depth = d
+        else:
+            depth = 11 if self.st_inter else 1
+
+        batch_size /= depth
+        labels = torch.cat([(torch.arange(batch_size, dtype=torch.long) + int(batch_size * torch.distributed.get_rank())) for _ in range(depth)], dim=0).to(self.device)
+
+        s_features = F.normalize(s_features, dim=1)
+        t_features = F.normalize(t_features, dim=1)
+
+        similarity_matrix = torch.matmul(s_features, t_features.T)
+
+        tau = 0.2
+
+        logits = similarity_matrix / tau
+        loss = self.criterion(logits, labels)
+        return 2*tau*loss
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
@@ -141,39 +217,89 @@ class PLLearner(pl.LightningModule):
         images = batch[0]
         batch_size = images.shape[0]
 
+        self.update_lr()
+
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
+        # projections
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        # student_output1, student_detached1, student_proj1 = student_output1
+        # student_output2, student_detached2, student_proj2 = student_output2
+        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
-        if self.st_inter != self.t_inter:
-            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
-
-        if self.ratio > 0:
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+        loss_mid, loss_detached = 0, 0
+        if self.t_inter:
             teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
             teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
-            loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
-            loss = loss_output + self.ratio * loss_mid
+
+        teacher_output1 = concat_all_gather(teacher_output1)
+        teacher_output2 = concat_all_gather(teacher_output2)
+
+        if self.st_inter:
+            """manual update for predictor"""
+            student_detached1 = self.student.predict(student_output1.detach())
+            student_detached2 = self.student.predict(student_output2.detach())
+
+            loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
+
+            # opt = self.optimizer_pred
+            # opt.zero_grad()
+            # self.manual_backward(12 * loss_detached)
+            # opt.step()
+
+            """compute loss for vit and projector (update predictor slightly)"""
+            student_output1 = self.student.predict(student_output1)
+            student_output2 = self.student.predict(student_output2)
+
+            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            loss_mid = self.info_nce_loss_layer(student_mid1, teacher_output1) + self.info_nce_loss_layer(student_mid2, teacher_output2)
+
         else:
-            loss = loss_fn(student_output1, teacher_output1).mean()
-            loss += loss_fn(student_output2, teacher_output2).mean()
-            if self.st_inter:
-                loss *= 12
+            student_output1 = self.student.predict(student_output1)
+            student_output2 = self.student.predict(student_output2)
+
+        # if self.t_inter:
+        #     _, student_proj1 = torch.split(student_proj1, [batch_size, 11 * batch_size], dim=0)
+        #     _, student_proj2 = torch.split(student_proj2, [batch_size, 11 * batch_size], dim=0)
+        #     loss_mid += cos_fn(student_proj1, teacher_mid1) + cos_fn(student_proj2, teacher_mid2)
+
+
+        loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
+
+        # ratio = self.ratio if self.ratio > 0 else 11
+        loss = loss_output + self.ratio * loss_mid + 12 * loss_detached
+
+        opt = self.optimizer
+        opt.zero_grad()
+        self.manual_backward(loss)
+        opt.step()
+        # loss = self.info_nce_loss(student_output1, teacher_output1)
+        # loss += self.info_nce_loss(student_output2, teacher_output2)
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
+        self.momentum_update()
+
         return {'loss': loss}
 
-    def on_after_backward(self):
+    # def on_after_backward(self):
+    def update_lr(self):
+        self.ratio = self.ratio_schedule[self.global_step]
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    def on_before_zero_grad(self, _):
+        # for i, param_group in enumerate(self.optimizer_pred.param_groups):
+        #     param_group["lr"] = self.lr_schedule[self.global_step]
+        #     if i == 0:
+        #         self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
+        #         param_group["weight_decay"] = self.wd_schedule[self.global_step]
+
+    # def on_before_zero_grad(self, _):
+    def momentum_update(self):
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
@@ -429,7 +555,9 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.05)
+    model = learner.student if args.student else learner.teacher
+    model.eval()
+    tuner = fine_tune.Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -443,19 +571,6 @@ def main(args):
         callbacks=[lr_monitor],
         progress_bar_refresh_rate=0
     )
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
-    fine_trainer.current_epoch += 1
-    fine_trainer.max_epochs += 100
-    fine_trainer.global_step = 0
-
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader1), 0.1)
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
-    fine_trainer.current_epoch += 1
-    fine_trainer.max_epochs += 100
-    fine_trainer.global_step = 0
-
-    learner.student.eval()
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), 0.1)
     fine_trainer.fit(tuner, fine_loader1, val_loader)
 
 
@@ -549,6 +664,7 @@ if __name__ == '__main__':
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
     parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
+    parser.add_argument('--student', default=False, type=utils.bool_flag, help='choose student or teacher network')
 
     hparam = parser.parse_args()
     if hparam.load_json:
