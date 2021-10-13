@@ -173,8 +173,8 @@ class PLLearner(pl.LightningModule):
         # if args.use_fp16:
         #     self.fp16_scaler = torch.cuda.amp.GradScaler()
 
-    # def configure_optimizers(self):
-    #     return [self.optimizer]
+    def configure_optimizers(self):
+        return [self.optimizer]
 
     def info_nce_loss(self, s_features, t_features):
         batch_size = s_features.shape[0]
