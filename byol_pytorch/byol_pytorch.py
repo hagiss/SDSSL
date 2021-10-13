@@ -84,7 +84,7 @@ class NetWrapper(nn.Module):
                 if i == 11:
                     mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
                 else:
-                    mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden/2, last_bn)
+                    mlp = MLP(3, embed_size, args.out_dim, int(args.mlp_hidden/2), last_bn)
 
                 self.projector.append(mlp)
 
