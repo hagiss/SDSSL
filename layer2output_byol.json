@@ -22,7 +22,7 @@
   "accelerator": "ddp",
   "accumulate": 1,
   "val_interval": 20,
-  "div": 1,
+  "div": 0.8,
   "ratio": 1,
   "up": 0,
   "st_inter": true,

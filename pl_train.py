@@ -536,7 +536,7 @@ if __name__ == '__main__':
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
-    parser.add_argument('--ratio', default=1, type=int, help='loss ratio of layer2output')
+    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
