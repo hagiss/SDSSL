@@ -220,6 +220,8 @@ class PLLearner(pl.LightningModule):
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
+        self.momentum_update()
+
         return {'loss': loss}
 
     def update_lr(self):

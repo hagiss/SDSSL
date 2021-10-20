@@ -4,7 +4,6 @@ import torchvision.datasets as datasets
 from torch.utils.data import DataLoader, Dataset
 import argparse
 import torch.nn.functional as F
-from einops import repeat
 
 from torchvision import transforms as T
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -18,7 +17,6 @@ import json
 import math
 import vision_transformer as vits
 from byol_pytorch import NetWrapper
-import fine_tune
 
 from PIL import Image
 
