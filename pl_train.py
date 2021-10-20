@@ -232,7 +232,7 @@ class PLLearner(pl.LightningModule):
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    def momentum_update(self, _):
+    def momentum_update(self):
         # self.j += 1
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
