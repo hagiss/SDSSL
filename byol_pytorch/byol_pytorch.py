@@ -80,16 +80,16 @@ class NetWrapper(nn.Module):
             if prediction:
                 self.predictor = nn.ModuleList([])
 
-            for i in range(12):
-                if i == 11:
+            for i in range(4): #12 로 수정
+                if i == 3: #11
                     mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
                 else:
-                    mlp = MLP(3, embed_size, args.out_dim, int(args.mlp_hidden/2), last_bn)
+                    mlp = MLP(3, 64*pow(2, i), args.out_dim, int(args.mlp_hidden/2), last_bn)
 
                 self.projector.append(mlp)
 
                 if prediction:
-                    if i == 11:
+                    if i == 3: #11
                         mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     else:
                         mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
@@ -104,7 +104,7 @@ class NetWrapper(nn.Module):
         # else:
         #     representation = self.net(x)
         if self.intermediate and return_embedding is False:
-            representation = self.net.get_intermediate_layers(x, 12)
+            representation = self.net.get_intermediate_layers(x) #12
         else:
             representation = self.net(x)
 
@@ -113,9 +113,9 @@ class NetWrapper(nn.Module):
 
         if self.intermediate:
             ret = []
-            representation = rearrange(representation, "(d b) e -> d b e", d=12)
+            # representation = rearrange(representation, "(d b) e -> d b e", d=12) # 12
             for i, project in enumerate(self.projector):
-                ret.append(project(representation[i, :]))
+                ret.append(project(representation[i]))#, :]))
 
             if self.up > 0:
                 last = ret[-1].unsqueeze(0)
@@ -137,7 +137,7 @@ class NetWrapper(nn.Module):
 
         if self.intermediate:
             ret = []
-            projections = rearrange(x, "(d b) e -> d b e", d=12)
+            projections = rearrange(x, "(d b) e -> d b e", d=4) # 12
             for i, predictor in enumerate(self.predictor):
                 prediction = predictor(projections[i, :])
                 ret.append(prediction)
