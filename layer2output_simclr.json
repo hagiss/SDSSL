@@ -23,7 +23,7 @@
   "accumulate": 1,
   "val_interval": 20,
   "div": 1,
-  "ratio": 0.6,
+  "ratio": 0.8,
   "up": 0,
   "st_inter": true,
   "t_inter": false,
