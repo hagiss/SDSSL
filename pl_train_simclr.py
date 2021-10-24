@@ -162,7 +162,7 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.student(image_one), self.student(image_two)
+        return self.student(torch.cat((image_one, image_two), dim=0)) #), self.student(image_two)
 
     def info_nce_loss(self, features):
         if self.labels is None:
@@ -188,24 +188,47 @@ class PLLearner(pl.LightningModule):
         if self.label is None:
             self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
-        logits = logits / self.temperature
+        logits = logits / 0.1
         return self.criterion(logits, self.label)
 
     def info_nce_loss_intermediate(self, layer_features, output):
         b = layer_features.shape[0]
+        output = F.normalize(output, dim=1)
+        layer_features = F.normalize(layer_features, dim=1)
 
-        labels = torch.cat([torch.arange(b/11, dtype=torch.long, device=self.device) + int((b/11) * torch.distributed.get_rank()) for _ in range(11)], dim=0)
+        # labels = torch.cat([torch.cat([torch.arange(b/22) for i in range(2)], dim=0) + int((b/11) * torch.distributed.get_rank()) for _ in range(11)], dim=0)
+        if self.labels is None:
+            self.labels = torch.cat([torch.arange(b/22) for i in range(2)], dim=0)
+            self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
+            temp = [torch.zeros(self.labels.shape) for _ in torch.distributed.get_world_size()]
+            temp[torch.distributed.get_rank()] = self.labels
+            self.labels = torch.cat(temp, dim=0)
+            self.labels.to(self.device)
+
+        if self.mask is None:
+            self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool)
+            temp = [torch.zeros(self.labels.shape) for _ in torch.distributed.get_world_size()]
+            temp[torch.distributed.get_rank()] = self.mask
+            self.mask = torch.cat(temp, dim=0).to(self.device)
+        labels = self.labels[~self.mask].view(self.labels.shape[0], -1)
 
         output = concat_all_gather(output)
 
-        layer_features = F.normalize(layer_features, dim=1)
-        output = F.normalize(output, dim=1)
-
         similarity_matrix = torch.matmul(layer_features, output.T)
 
-        logits = similarity_matrix / 0.1
-        loss = self.criterion(logits, labels)
-        return loss
+        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+
+        logits = torch.cat([positives, negatives], dim=1)
+        if self.label is None:
+            self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
+
+        logits = logits / 0.1
+        return self.criterion(logits, self.label)
+
+        # logits = similarity_matrix / 0.1
+        # loss = self.criterion(logits, labels)
+        # return loss
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
@@ -214,7 +237,7 @@ class PLLearner(pl.LightningModule):
         self.update_lr()
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        student_output1, student_output2 = self.forward(images)
+        student_output = self.forward(images)
 
         # if self.st_inter != self.t_inter:
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
@@ -222,10 +245,10 @@ class PLLearner(pl.LightningModule):
 
         loss_mid = 0.0
         if self.st_inter != self.t_inter:
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2.detach()) + self.info_nce_loss_intermediate(student_mid2, student_output1.detach())
-        loss_output = self.info_nce_loss(torch.cat((student_output1, student_output2), dim=0))
+            student_mid, student_output = torch.split(student_output, [batch_size * 11, batch_size], dim=0)
+            # student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            loss_mid = self.info_nce_loss_intermediate(student_mid, student_output.detach())
+        loss_output = self.info_nce_loss(student_output)
         # if self.ratio > 0:
         #     ratio = self.ratio
         # else:
