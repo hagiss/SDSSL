@@ -153,6 +153,10 @@ class PLLearner(pl.LightningModule):
         self.label = None
         self.mask = None
 
+        self.labels_int = None
+        self.label_int = None
+        self.mask_int = None
+
         # self.fp16_scaler = None
         # if args.use_fp16:
         #     self.fp16_scaler = torch.cuda.amp.GradScaler()
@@ -196,35 +200,37 @@ class PLLearner(pl.LightningModule):
         output = F.normalize(output, dim=1)
         layer_features = F.normalize(layer_features, dim=1)
 
-        # labels = torch.cat([torch.cat([torch.arange(b/22) for i in range(2)], dim=0) + int((b/11) * torch.distributed.get_rank()) for _ in range(11)], dim=0)
-        if self.labels is None:
-            self.labels = torch.cat([torch.arange(b/22) for i in range(2)], dim=0)
-            self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
-            temp = [torch.zeros(self.labels.shape) for _ in torch.distributed.get_world_size()]
-            temp[torch.distributed.get_rank()] = self.labels
-            self.labels = torch.cat(temp, dim=0)
-            self.labels.to(self.device)
-
-        if self.mask is None:
-            self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool)
-            temp = [torch.zeros(self.labels.shape) for _ in torch.distributed.get_world_size()]
-            temp[torch.distributed.get_rank()] = self.mask
-            self.mask = torch.cat(temp, dim=0).to(self.device)
-        labels = self.labels[~self.mask].view(self.labels.shape[0], -1)
-
         output = concat_all_gather(output)
-
         similarity_matrix = torch.matmul(layer_features, output.T)
+
+        # labels = torch.cat([torch.cat([torch.arange(b/22) for i in range(2)], dim=0) + int((b/11) * torch.distributed.get_rank()) for _ in range(11)], dim=0)
+        if self.labels_int is None:
+            self.labels_int = torch.cat([torch.arange(b/22) for i in range(2)], dim=0)
+            self.labels_int = (self.labels_int.unsqueeze(0) == self.labels_int.unsqueeze(1)).float()
+            temp = [torch.zeros(self.labels_int.shape) for _ in range(torch.distributed.get_world_size())]
+            temp[torch.distributed.get_rank()] = self.labels_int
+            self.labels_int = torch.cat(temp, dim=0).T
+            self.labels_int = repeat(self.labels_int, "h w -> (r h) w", r=11).to(self.device)
+
+        if self.mask_int is None:
+            self.mask_int = torch.eye(int(b/11), dtype=torch.bool)
+            temp = [torch.zeros(self.mask_int.shape, dtype=torch.bool) for _ in range(torch.distributed.get_world_size())]
+            temp[torch.distributed.get_rank()] = self.mask_int
+            self.mask_int = torch.cat(temp, dim=0).to(self.device).T
+            self.mask_int = repeat(self.mask_int, "h w -> (r h) w", r=11)
+
+        labels = self.labels_int[~self.mask_int].view(self.labels_int.shape[0], -1)
+        similarity_matrix = similarity_matrix[~self.mask_int].view(similarity_matrix.shape[0], -1)
 
         positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
         negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
 
         logits = torch.cat([positives, negatives], dim=1)
-        if self.label is None:
-            self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
+        if self.label_int is None:
+            self.label_int = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
         logits = logits / 0.1
-        return self.criterion(logits, self.label)
+        return self.criterion(logits, self.label_int)
 
         # logits = similarity_matrix / 0.1
         # loss = self.criterion(logits, labels)
@@ -232,7 +238,7 @@ class PLLearner(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
-        batch_size = images.shape[0]
+        batch_size = images.shape[0] * 2
 
         self.update_lr()
 
@@ -428,8 +434,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        # path = 'dataset'
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = 'dataset'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -524,7 +530,7 @@ def main(args):
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
+        # progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
