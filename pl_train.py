@@ -103,6 +103,7 @@ class PLLearner(pl.LightningModule):
         self.ratio_schedule = utils.cosine_scheduler(
             0, args.ratio,
             args.epochs, length,
+            warmup_epochs=args.warmup_epochs,
         )
 
         # print(length)

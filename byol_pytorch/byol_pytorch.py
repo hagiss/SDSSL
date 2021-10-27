@@ -95,7 +95,9 @@ class NetWrapper(nn.Module):
                         mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     self.predictor.append(mlp2)
 
-    def get_representation(self, x):
+    def get_representation(self, x, intermediate=False):
+        if intermediate:
+            return self.net.get_intermediate_layers(x, 12)
         return self.forward(x, True)
 
     def forward(self, x, return_embedding=False, epoch=None):

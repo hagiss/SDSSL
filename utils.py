@@ -561,6 +561,42 @@ class LARS(torch.optim.Optimizer):
                 p.add_(mu, alpha=-g['lr'])
 
 
+class PCA():
+    """
+    Class to  compute and apply PCA.
+    """
+    def __init__(self, dim=256, whit=0.5):
+        self.dim = dim
+        self.whit = whit
+        self.mean = None
+
+    def train_pca(self, cov):
+        """
+        Takes a covariance matrix (np.ndarray) as input.
+        """
+        d, v = np.linalg.eigh(cov)
+        eps = d.max() * 1e-5
+        n_0 = (d < eps).sum()
+        if n_0 > 0:
+            d[d < eps] = eps
+
+        # total energy
+        totenergy = d.sum()
+
+        # sort eigenvectors with eigenvalues order
+        idx = np.argsort(d)[::-1][:self.dim]
+        d = d[idx]
+        v = v[:, idx]
+
+        print("keeping %.2f %% of the energy" % (d.sum() / totenergy * 100.0))
+
+        # for the whitening
+        d = np.diag(1. / d**self.whit)
+
+        # principal components
+        self.dvt = np.dot(d, v.T)
+
+
 class MultiCropWrapper(nn.Module):
     """
     Perform forward pass separately on each resolution input.

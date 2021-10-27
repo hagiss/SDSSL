@@ -545,7 +545,7 @@ def main(args):
     args.total_batch = total_batch
     args.optimizer = 'adamw'
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=len(data_loader),
