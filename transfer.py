@@ -142,7 +142,9 @@ def main(args):
     args.total_batch = 1024
     args.weight_decay_end = 0.1
 
-    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    args.st_inter = True
+
+    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=0,
