@@ -214,7 +214,7 @@ if __name__ == '__main__':
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
     parser.add_argument('--data-set', '-ds', default='stl10',
-                        help='dataset name', choices=['stl10', 'cifar10', 'cifar100', 'imagenet'])
+                        help='dataset name', choices=['stl10', 'cifar10', 'cifar100', 'imagenet', 'flowers', 'pets'])
     parser.add_argument('--name', help='name for tensorboard')
     parser.add_argument('--val_interval', default=10, type=int, help='validation epoch interval')
     parser.add_argument('--accelerator', default='ddp', type=str,
