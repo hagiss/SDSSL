@@ -173,14 +173,22 @@ class PLLearner(pl.LightningModule):
             b, _ = features.shape
             self.labels = torch.cat([torch.arange(b/2) for i in range(2)], dim=0)
             self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
+            temp = [torch.zeros(self.labels.shape) for _ in range(torch.distributed.get_world_size())]
+            temp[torch.distributed.get_rank()] = self.labels_int
+            self.labels = torch.cat(temp, dim=0).T
             self.labels.to(self.device)
 
         features = F.normalize(features, dim=1)
+        output = concat_all_gather(features)
 
-        similarity_matrix = torch.matmul(features, features.T)
+        similarity_matrix = torch.matmul(features, output.T)
 
         if self.mask is None:
             self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool, device=self.device)
+            temp = [torch.zeros(self.mask.shape, dtype=torch.bool) for _ in
+                    range(torch.distributed.get_world_size())]
+            temp[torch.distributed.get_rank()] = self.mask_int
+            self.mask = torch.cat(temp, dim=0).to(self.device).T
         labels = self.labels[~self.mask].view(self.labels.shape[0], -1)
         similarity_matrix = similarity_matrix[~self.mask].view(similarity_matrix.shape[0], -1)
 
