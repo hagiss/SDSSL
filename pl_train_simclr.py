@@ -169,8 +169,8 @@ class PLLearner(pl.LightningModule):
         return self.student(torch.cat((image_one, image_two), dim=0)) #), self.student(image_two)
 
     def info_nce_loss(self, features):
+        b, _ = features.shape
         if self.labels is None:
-            b, _ = features.shape
             self.labels = torch.cat([torch.arange(b/2) for i in range(2)], dim=0)
             self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
             temp = [torch.zeros(self.labels.shape) for _ in range(torch.distributed.get_world_size())]
@@ -184,7 +184,7 @@ class PLLearner(pl.LightningModule):
         similarity_matrix = torch.matmul(features, output.T)
 
         if self.mask is None:
-            self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool, device=self.device)
+            self.mask = torch.eye(int(b/2), dtype=torch.bool, device=self.device)
             temp = [torch.zeros(self.mask.shape, dtype=torch.bool) for _ in
                     range(torch.distributed.get_world_size())]
             temp[torch.distributed.get_rank()] = self.mask_int
@@ -538,7 +538,7 @@ def main(args):
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        # progress_bar_refresh_rate=0
+        progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
