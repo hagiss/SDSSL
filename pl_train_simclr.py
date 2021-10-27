@@ -184,7 +184,7 @@ class PLLearner(pl.LightningModule):
         similarity_matrix = torch.matmul(features, output.T)
 
         if self.mask is None:
-            self.mask = torch.eye(int(b/2), dtype=torch.bool)
+            self.mask = torch.eye(b, dtype=torch.bool)
             temp = [torch.zeros(self.mask.shape, dtype=torch.bool) for _ in
                     range(torch.distributed.get_world_size())]
             temp[torch.distributed.get_rank()] = self.mask
