@@ -307,9 +307,9 @@ def main(args):
     args.image_size = image_size
     args.total_batch = total_batch
     args.optimizer = 'adamw'
-    args.st_inter = True
+    args.st_inter = False
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=len(data_loader),
@@ -320,81 +320,81 @@ def main(args):
     model = learner.teacher.net
     for p in model.parameters():
         p.requires_grad = False
-    #
-    # model.eval()
-    # tuner = Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
-    # fine_trainer = pl.Trainer(
-    #     gpus=torch.cuda.device_count(),
-    #     max_epochs=100,
-    #     default_root_dir="output/vit.model",
-    #     accelerator=args.accelerator,
-    #     num_sanity_val_steps=0,
-    #     check_val_every_n_epoch=10,
-    #     sync_batchnorm=True,
-    #     # progress_bar_refresh_rate=0
-    # )
-    # fine_trainer.fit(tuner, fine_loader1, val_loader)
+
+    model.eval()
+    tuner = Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
+    fine_trainer = pl.Trainer(
+        gpus=torch.cuda.device_count(),
+        max_epochs=100,
+        default_root_dir="output/vit.model",
+        accelerator=args.accelerator,
+        num_sanity_val_steps=0,
+        check_val_every_n_epoch=10,
+        sync_batchnorm=True,
+        # progress_bar_refresh_rate=0
+    )
+    fine_trainer.fit(tuner, fine_loader1, val_loader)
 
     ###################################### KNN
-    model.eval()
-    model.cuda()
-
-    train_features = []
-    train_targets = []
-    k = 20
-    retrieval_one_hot = torch.zeros(k, 1000).cuda()
-    top1, top5, total = 0.0, 0.0, 0
-
-    for b in tqdm(train_loader):
-        features = model(b[0].cuda()).detach()
-        features = F.normalize(features, dim=1).cpu()
-
-        train_features.append(features)
-        train_targets.append(b[1])
-
-    train_features = torch.cat(train_features, dim=0).cuda()
-    train_targets = torch.cat(train_targets, dim=0).cuda()
-
-    for b in tqdm(val_loader):
-        features = model(b[0].cuda())
-        features = F.normalize(features, dim=1).detach()
-
-        targets = b[1].cuda()
-
-        batch_size = targets.shape[0]
-
-        similarity = torch.mm(features, train_features.T)
-
-        distances, indices = similarity.topk(k, largest=True, sorted=True)
-        distances = distances.cuda()
-        indices = indices.cuda()
-
-        candidates = train_targets.view(1, -1).expand(batch_size, -1)
-        retrieved_neighbors = torch.gather(candidates, 1, indices)
-
-        retrieval_one_hot.resize_(batch_size * k, 1000).zero_()
-        retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
-        # print("retrieval_one_hot", retrieval_one_hot)
-        distances_transform = distances.clone().div_(0.07).exp_()
-        # print("distances_transform", distances_transform)
-        probs = torch.sum(
-            torch.mul(
-                retrieval_one_hot.view(batch_size, -1, 1000),
-                distances_transform.view(batch_size, -1, 1),
-            ),
-            1,
-        )
-        _, predictions = probs.sort(1, True)
-
-        correct = predictions.eq(targets.data.view(-1, 1))
-        top1 = top1 + correct.narrow(1, 0, 1).sum().item()
-        top5 = top5 + correct.narrow(1, 0, 5).sum().item()
-        total += targets.size(0)
-
-    top1 = top1 * 100.0 / total
-    top5 = top5 * 100.0 / total
-
-    print(f"top1: {top1}  top5: {top5}")
+    # model.eval()
+    # model.cuda()
+    #
+    # train_features = []
+    # train_targets = []
+    # k = 20
+    # retrieval_one_hot = torch.zeros(k, 1000).cuda()
+    # top1, top5, total = 0.0, 0.0, 0
+    #
+    # for b in tqdm(train_loader):
+    #     features = model(b[0].cuda()).detach()
+    #     features = F.normalize(features, dim=1).cpu()
+    #
+    #     train_features.append(features)
+    #     train_targets.append(b[1])
+    #
+    # train_features = torch.cat(train_features, dim=0).cuda()
+    # train_targets = torch.cat(train_targets, dim=0).cuda()
+    #
+    # for b in tqdm(val_loader):
+    #     features = model(b[0].cuda())
+    #     features = F.normalize(features, dim=1).detach()
+    #
+    #     targets = b[1].cuda()
+    #
+    #     batch_size = targets.shape[0]
+    #
+    #     similarity = torch.mm(features, train_features.T)
+    #
+    #     distances, indices = similarity.topk(k, largest=True, sorted=True)
+    #     distances = distances.cuda()
+    #     indices = indices.cuda()
+    #
+    #     candidates = train_targets.view(1, -1).expand(batch_size, -1)
+    #     retrieved_neighbors = torch.gather(candidates, 1, indices)
+    #
+    #     retrieval_one_hot.resize_(batch_size * k, 1000).zero_()
+    #     retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
+    #     # print("retrieval_one_hot", retrieval_one_hot)
+    #     distances_transform = distances.clone().div_(0.07).exp_()
+    #     # print("distances_transform", distances_transform)
+    #     probs = torch.sum(
+    #         torch.mul(
+    #             retrieval_one_hot.view(batch_size, -1, 1000),
+    #             distances_transform.view(batch_size, -1, 1),
+    #         ),
+    #         1,
+    #     )
+    #     _, predictions = probs.sort(1, True)
+    #
+    #     correct = predictions.eq(targets.data.view(-1, 1))
+    #     top1 = top1 + correct.narrow(1, 0, 1).sum().item()
+    #     top5 = top5 + correct.narrow(1, 0, 5).sum().item()
+    #     total += targets.size(0)
+    #
+    # top1 = top1 * 100.0 / total
+    # top5 = top5 * 100.0 / total
+    #
+    # print(f"top1: {top1}  top5: {top5}")
 
 
 if __name__ == '__main__':
@@ -403,11 +403,11 @@ if __name__ == '__main__':
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
 
-    parser.add_argument('--lr', '-l', default=2e-4, type=float, help='learning rate')
+    parser.add_argument('--lr', '-l', default=0.002, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=100, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=2048, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=10, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=6, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')

@@ -282,7 +282,7 @@ class VisionTransformer(nn.Module):
         pos_embed.requires_grad = False
         return pos_embed
 
-    def prepare_tokens(self, x, pos_embed, dino=False):
+    def prepare_tokens(self, x, pos_embed=None, dino=False):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
         if dino is False:
@@ -297,7 +297,10 @@ class VisionTransformer(nn.Module):
             x = torch.cat((cls_tokens, x), dim=1)
 
         # add positional encoding to each token
-        x = x + pos_embed
+        if pos_embed is not None:
+            x = x + pos_embed
+        else:
+            x = x + self.pos_embed
 
         return self.pos_drop(x)
 
@@ -336,12 +339,12 @@ class VisionTransformer(nn.Module):
         m = nn.ZeroPad2d((0, 32, 0, 32))
         x = m(x)
         nc, c, w, h = x.shape
-        x = x[:, :, :w - w%32, :h - h%32]
+        x = x[:, :, :w - w % 32, :h - h % 32]
         nc, c, w, h = x.shape
         w /= self.patch_embed.patch_size[0]
         h /= self.patch_embed.patch_size[1]
         pos_emb = self.build_2d_sincos_position_embedding_inference(h=h, w=w)
-        x = self.prepare_tokens(x, pos_emb, dino)
+        x = self.prepare_tokens(x, pos_embed=pos_emb, dino=dino)
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):

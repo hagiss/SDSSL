@@ -119,12 +119,12 @@ class PLLearner(pl.LightningModule):
             print(f"Epoch: {self.current_epoch}  acc: {accuracy.item()}  best: {self.best}")
 
 def main(args):
-
+    drop_rate = 0
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
-            drop_rate=0,
-            drop_path_rate=0,  # stochastic depth
+            drop_rate=drop_rate,
+            drop_path_rate=drop_rate,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
@@ -144,9 +144,9 @@ def main(args):
     args.total_batch = 1024
     args.weight_decay_end = 0.1
 
-    args.st_inter = True
+    args.st_inter = False
 
-    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
+    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=0,
@@ -162,7 +162,7 @@ def main(args):
     #####################################
     args.input_size = 224
     args.embed_dim = embed_dim
-    args.data_path = "../data/pets/"
+    args.data_path = "../data/"
 
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
@@ -208,7 +208,7 @@ def main(args):
     # top1, top5, total = 0.0, 0.0, 0
     #
     # for b in tqdm(data_loader_train):
-    #     features = model(b[0].cuda()).cpu()
+    #     features = model(b[0].cuda()).detach()
     #     features = F.normalize(features, dim=1).cpu()
     #
     #     train_features.append(features)
@@ -218,7 +218,7 @@ def main(args):
     # train_targets = torch.cat(train_targets, dim=0).cuda()
     #
     # for b in tqdm(data_loader_val):
-    #     features = model(b[0].cuda())
+    #     features = model(b[0].cuda()).detach()
     #     features = F.normalize(features, dim=1)
     #
     #     targets = b[1].cuda()
@@ -282,7 +282,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
-    parser.add_argument('--data-set', '-ds', default='stl10',
+    parser.add_argument('--data-set', '-ds', default='cifar10',
                         help='dataset name', choices=['stl10', 'cifar10', 'cifar100', 'imagenet', 'flowers', 'pets'])
     parser.add_argument('--name', help='name for tensorboard')
     parser.add_argument('--val_interval', default=10, type=int, help='validation epoch interval')
