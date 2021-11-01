@@ -225,11 +225,8 @@ class PLLearner(pl.LightningModule):
         if self.st_inter != self.t_inter:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            print('aaaa')
             loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2.detach()) + self.info_nce_loss_intermediate(student_mid2, student_output1.detach())
-            print('aaaabbbbbbb')
         loss_output = self.info_nce_loss(torch.cat((student_output1, student_output2), dim=0))
-        print('aaaabbbbbbbcccccc')
         # if self.ratio > 0:
         #     ratio = self.ratio
         # else:
@@ -478,7 +475,6 @@ def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
-            drop_path_rate=0.1,  # stochastic depth
         )
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
@@ -510,7 +506,13 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), args.lr)
+    model = learner.student
+    for p in model.parameters():
+        p.requires_grad = False
+
+    model.eval()
+
+    tuner = fine_tune.Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
