@@ -30,7 +30,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            and callable(torchvision_models.__dict__[name]))
 
 n_last_frames = 7
-output_dir = "/data/byol-pytorch/output/video_segmentation/moco_l2o_8"
+output_dir = "/data/byol-pytorch/output/video_segmentation/moco_base_8"
 @torch.no_grad()
 def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette):
     """
@@ -154,7 +154,7 @@ def label_propagation(model, frame_tar, list_frame_feats, list_segs, mask_neighb
 
 def extract_feature(model, frame, return_h_w=False):
     """Extract one frame feature everytime."""
-    out = model.get_intermediate_layers_all(frame.unsqueeze(0).cuda(), n=3)
+    out = model.get_intermediate_layers_all(frame.unsqueeze(0).cuda(), n=8)[0].clone()
     out = out[:, 1:, :]  # we discard the [CLS] token
     h, w = int(frame.shape[1] / model.patch_embed.patch_size[0]), int(frame.shape[2] / model.patch_embed.patch_size[1])
     dim = out.shape[-1]
@@ -275,11 +275,12 @@ def main(args):
     total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
     clip = args.clip_grad
 
-    args.image_size = 320
+    args.image_size = 224
     args.total_batch = total_batch
     args.optimizer = 'adamw'
+    args.st_inter = False
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=0,
@@ -326,7 +327,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=10, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
@@ -345,25 +346,10 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
-
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
-    # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-    #     during which we keep the output layer fixed. Typically doing so during
-    #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
             weight decay. With ViT, a smaller value at the beginning of training works well.""")
     parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
@@ -373,32 +359,18 @@ if __name__ == '__main__':
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
 
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
-
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
                         choices=['vit_tiny', 'vit_small', 'vit_base', 'deit_base', 'deit_tiny',
                                  'deit_small'] + torchvision_archs,
                         help="""Name of architecture to train. For quick experiments with ViTs,
                 we recommend using vit_tiny or vit_small.""")
-    parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
+    parser.add_argument('--patch_size', default=32, type=int, help="""Size in pixels
             of input square patches - default 16 (for 16x16 patches). Using smaller
             values leads to better performance but requires more memory. Applies only
             for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
             mixed precision training (--use_fp16 false) to avoid unstabilities.""")
-    parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of
+    parser.add_argument('--out_dim', default=256, type=int, help="""Dimensionality of
             the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--div', default=4, type=int, help="dividing hidden dimensions of mlp1")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA

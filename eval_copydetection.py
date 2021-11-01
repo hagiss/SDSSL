@@ -158,14 +158,18 @@ def extract_features(image_list, model, args):
         num_workers=args.num_workers, drop_last=False,
         sampler=torch.utils.data.DistributedSampler(tempdataset, shuffle=False))
     features = None
-    for samples, index in utils.MetricLogger(delimiter="  ").log_every(data_loader, 10):
+    for samples, index in data_loader:
         samples, index = samples.cuda(non_blocking=True), index.cuda(non_blocking=True)
-        feats = model.get_intermediate_layers_all(samples, n=1)[0].clone()
+        feats = model.get_intermediate_layers_all(samples, n=2)
 
-        cls_output_token = feats[:, 0, :]  #  [CLS] token
+        # print(feats.shape)
+
+        cls_output_token = feats[0][:, 0, :]  #  [CLS] token
+        # cls_output_token = cls_output_token.unsqueeze(0)
         # GeM with exponent 4 for output patch tokens
-        b, h, w, d = len(samples), int(samples.shape[-2] / model.patch_embed.patch_size), int(samples.shape[-1] / model.patch_embed.patch_size), feats.shape[-1]
-        feats = feats[:, 1:, :].reshape(b, h, w, d)
+        b, h, w, d = len(samples), int(samples.shape[-2] / model.patch_embed.patch_size[0]), int(samples.shape[-1] / model.patch_embed.patch_size[1]), feats[0].shape[-1]
+        feats = feats[0][:, 1:, :].reshape(b, h, w, d)
+        # feats = feats.unsqueeze(0).reshape(b, h, w, d)
         feats = feats.clamp(min=1e-6).permute(0, 3, 1, 2)
         feats = torch.nn.functional.avg_pool2d(feats.pow(4), (h, w)).pow(1. / 4).reshape(b, -1)
         # concatenate [CLS] token and GeM pooled patch tokens
@@ -174,8 +178,7 @@ def extract_features(image_list, model, args):
         # init storage feature matrix
         if dist.get_rank() == 0 and features is None:
             features = torch.zeros(len(data_loader.dataset), feats.shape[-1])
-            if args.use_cuda:
-                features = features.cuda(non_blocking=True)
+            features = features.cuda(non_blocking=True)
 
         # get indexes from all processes
         y_all = torch.empty(dist.get_world_size(), index.size(0), dtype=index.dtype, device=index.device)
@@ -193,113 +196,16 @@ def extract_features(image_list, model, args):
 
         # update storage feature matrix
         if dist.get_rank() == 0:
-            if args.use_cuda:
-                features.index_copy_(0, index_all, torch.cat(output_l))
-            else:
-                features.index_copy_(0, index_all.cpu(), torch.cat(output_l).cpu())
+            features.index_copy_(0, index_all, torch.cat(output_l))
     return features  # features is still None for every rank which is not 0 (main)
 
 
 def main(args):
-    # dataset = None
-    # dataset_train = None
-    # dataset_val = None
-    # fine_dataset = None
-    #
-    # image_size = 96 if args.dataset == "stl10" else 224
-    # # pretrain_transform = DataAugmentationDINO(
-    # #     args.global_crops_scale,
-    # #     args.local_crops_scale,
-    # #     args.local_crops_number
-    # # )
-    # pretrain_transform = T.Compose([
-    #     T.Resize((256, 256), interpolation=Image.BICUBIC),
-    #     # T.CenterCrop(image_size),
-    #     T.ToTensor(),
-    #     # T.Lambda(expand_greyscale)
-    # ])
-    # fine_transform = T.Compose([
-    #     T.RandomResizedCrop(224),
-    #     T.RandomHorizontalFlip(),
-    #     T.ToTensor(),
-    #     T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    # ])
-    # val_transform = T.Compose([
-    #     T.Resize((256, 256), interpolation=3),
-    #     T.CenterCrop((image_size, image_size)),
-    #     T.ToTensor(),
-    #     T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    # ])
-    #
-    # if args.dataset == "stl10":
-    #     dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
-    #     dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
-    #     dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
-    # elif args.dataset == "imagenet":
-    #     # path = 'dataset'
-    #     path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
-    #     dataset = datasets.ImageFolder(
-    #         path + '/train',
-    #         pretrain_transform
-    #     )
-    #     dataset_train = datasets.ImageFolder(
-    #         path + '/train',
-    #         val_transform
-    #     )
-    #     dataset_val = datasets.ImageFolder(
-    #         path + '/val',
-    #         pretrain_transform
-    #     )
-    #     fine_dataset = datasets.ImageFolder(
-    #         path + '/train',
-    #         fine_transform
-    #     )
-    # else:
-    #     assert "error"
-    # # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
-    # data_loader = DataLoader(
-    #     dataset,
-    #     # Subset(dataset, np.arange(64)),
-    #     batch_size=args.batch_size_per_gpu,
-    #     shuffle=True,
-    #     num_workers=args.num_workers,
-    #     drop_last=True,
-    #     pin_memory=True,
-    # )
-    # fine_loader1 = DataLoader(
-    #     fine_dataset,
-    #     # Subset(fine_dataset, np.arange(1024)),
-    #     batch_size=args.batch_size_per_gpu,
-    #     shuffle=True,
-    #     num_workers=args.num_workers,
-    #     drop_last=True,
-    #     pin_memory=True,
-    # )
-    # # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
-    # train_loader = DataLoader(
-    #     dataset_train,
-    #     # Subset(dataset_train, np.arange(64)),
-    #     batch_size=args.batch_size_per_gpu,
-    #     # sampler=sampler_train,
-    #     shuffle=False,
-    #     num_workers=args.num_workers,
-    #     pin_memory=True,
-    # )
-    # # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
-    # val_loader = DataLoader(
-    #     dataset_val,
-    #     # Subset(dataset_train, np.arange(64)),
-    #     batch_size=args.batch_size_per_gpu,
-    #     shuffle=False,
-    #     num_workers=args.num_workers,
-    #     pin_memory=True,
-    # )
-    # print("loaded dataset!")
-    #
+
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
-            drop_path_rate=0.1,  # stochastic depth
+            # drop_path_rate=0.1,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
@@ -310,18 +216,14 @@ def main(args):
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
-    #
-    # # student = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
-    # # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
 
-    lr = args.lr * 10000
-    min_lr = args.min_lr * 10000
-    total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
-    clip = args.clip_grad
+    utils.init_distributed_mode(args)
 
-    args.image_size = 320
-    args.total_batch = total_batch
+    args.image_size = 224
+    args.total_batch = 100
     args.optimizer = 'adamw'
+
+    args.st_inter = False
 
     learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
                                              student=student,
@@ -330,7 +232,7 @@ def main(args):
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.student if args.student else learner.teacher
+    model = learner.teacher
 
     model = model.net
 
@@ -359,8 +261,7 @@ def main(args):
     # extract features for distractors
     if os.path.isdir(args.distractors_path):
         print("Using distractors...")
-        list_distractors = [os.path.join(args.distractors_path, s) for s in os.listdir(args.distractors_path) if
-                            is_image_file(s)]
+        list_distractors = [os.path.join(args.distractors_path, s) for s in os.listdir(args.distractors_path)]
         database.append(extract_features(list_distractors, model, args))
     if utils.get_rank() == 0:
         database = torch.cat(database)
@@ -369,7 +270,8 @@ def main(args):
     # ============ Whitening ... ============
     if os.path.isdir(args.whitening_path):
         print(f"Extracting features on images from {args.whitening_path} for learning the whitening operator.")
-        list_whit = [os.path.join(args.whitening_path, s) for s in os.listdir(args.whitening_path) if is_image_file(s)]
+        list_whit = [os.path.join(args.whitening_path, s) for s in os.listdir(args.whitening_path)]
+        # print(len(list_whit))
         features_for_whitening = extract_features(list_whit, model, args)
         if utils.get_rank() == 0:
             # center
@@ -419,6 +321,8 @@ if __name__ == '__main__':
     parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
     parser.add_argument('--l2o', default=False, type=utils.bool_flag, help='layer2output')
+    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
+            distributed training; see https://pytorch.org/docs/stable/distributed.html""")
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
@@ -429,25 +333,10 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
-
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
-    # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-    #     during which we keep the output layer fixed. Typically doing so during
-    #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
             weight decay. With ViT, a smaller value at the beginning of training works well.""")
     parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
@@ -457,19 +346,13 @@ if __name__ == '__main__':
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
 
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
+    parser.add_argument('--data_path', default='/data/dataset/copy_detection/', type=str,
+                        help="See https://lear.inrialpes.fr/~jegou/data.php#copydays")
+    parser.add_argument('--whitening_path', default='/data/dataset/data_yfcc/whitening/', type=str,
+                        help="""Path to directory with images used for computing the whitening operator.
+            In our paper, we use 20k random images from YFCC100M.""")
+    parser.add_argument('--distractors_path', default='/data/dataset/data_yfcc/distractor/', type=str,
+                        help="Path to directory with distractors images. In our paper, we use 10k random images from YFCC100M.")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
@@ -477,12 +360,12 @@ if __name__ == '__main__':
                                  'deit_small'] + torchvision_archs,
                         help="""Name of architecture to train. For quick experiments with ViTs,
                 we recommend using vit_tiny or vit_small.""")
-    parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
+    parser.add_argument('--patch_size', default=32, type=int, help="""Size in pixels
             of input square patches - default 16 (for 16x16 patches). Using smaller
             values leads to better performance but requires more memory. Applies only
             for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
             mixed precision training (--use_fp16 false) to avoid unstabilities.""")
-    parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of
+    parser.add_argument('--out_dim', default=256, type=int, help="""Dimensionality of
             the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--div', default=4, type=int, help="dividing hidden dimensions of mlp1")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA

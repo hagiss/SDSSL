@@ -329,9 +329,14 @@ class VisionTransformer(nn.Module):
                 else:
                     output.append(self.norm(x)[:, 0])
 
-        return torch.cat(output, dim=0)
+        # return torch.cat(output, dim=0)
+        return output
 
     def get_intermediate_layers_all(self, x, n=1, dino=False):
+        m = nn.ZeroPad2d((0, 32, 0, 32))
+        x = m(x)
+        nc, c, w, h = x.shape
+        x = x[:, :, :w - w%32, :h - h%32]
         nc, c, w, h = x.shape
         w /= self.patch_embed.patch_size[0]
         h /= self.patch_embed.patch_size[1]
@@ -344,7 +349,7 @@ class VisionTransformer(nn.Module):
             if len(self.blocks) - i <= n:
                 output.append(self.norm(x))
 
-        return torch.cat(output, dim=0)
+        return output
 
 
 def vit_tiny(patch_size=16, **kwargs):

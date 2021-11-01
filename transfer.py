@@ -20,6 +20,7 @@ from timm.data import Mixup
 from timm.scheduler import create_scheduler
 from timm.optim import create_optimizer
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
+from timm.utils import NativeScaler, get_state_dict, ModelEma
 import utils
 import json
 import numpy as np
@@ -42,8 +43,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 class PLLearner(pl.LightningModule):
     def __init__(self, model, class_num, args):
         super().__init__()
-        self.model = model
-        self.fc = torch.nn.Linear(args.embed_dim, args.nb_classes)
+        self.model = torch.nn.Sequential(model, torch.nn.Linear(args.embed_dim, args.nb_classes))
 
         self.mixup_fn = None
         mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
@@ -52,6 +52,8 @@ class PLLearner(pl.LightningModule):
                 mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
                 prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
                 label_smoothing=args.smoothing, num_classes=class_num)
+
+        args.lr = args.lr * args.batch_size_per_gpu * utils.get_world_size() / 512.0
 
         self.optimizer = create_optimizer(args, self.model)
         self.lr_scheduler, _ = create_scheduler(args, self.optimizer)
@@ -76,8 +78,8 @@ class PLLearner(pl.LightningModule):
         if self.mixup_fn is not None:
             samples, targets = self.mixup_fn(samples, targets)
 
-        feature = self.fc(self.model(samples))
-        loss = self.criterion(feature, targets)
+        feature = self.model(samples)
+        loss = self.criterion(feature, targets) * 0.5
 
         return {'loss': loss}
 
@@ -88,7 +90,7 @@ class PLLearner(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, label = batch
 
-        logits = self.fc(self.model(x))
+        logits = self.model(x)
 
         accuracy = self.flat_accuracy(logits.detach().cpu().numpy(), label.cpu().numpy())
 
@@ -121,8 +123,8 @@ def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
-            drop_rate=0.1,
-            drop_path_rate=0.1,  # stochastic depth
+            drop_rate=0,
+            drop_path_rate=0,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
@@ -142,23 +144,25 @@ def main(args):
     args.total_batch = 1024
     args.weight_decay_end = 0.1
 
-    args.st_inter = False
+    args.st_inter = True
 
-    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.student
-
+    model = learner.teacher
     model = model.net
+
+    for p in model.parameters():
+        p.requires_grad = True
 
     #####################################
     args.input_size = 224
     args.embed_dim = embed_dim
-    args.data_path = "../data"
+    args.data_path = "../data/pets/"
 
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
@@ -193,6 +197,69 @@ def main(args):
     trainer.fit(learner, data_loader_train, data_loader_val)
 
 
+    ###################################### KNN
+    # model.eval()
+    # model.cuda()
+    #
+    # train_features = []
+    # train_targets = []
+    # k = 20
+    # retrieval_one_hot = torch.zeros(k, args.nb_classes).cuda()
+    # top1, top5, total = 0.0, 0.0, 0
+    #
+    # for b in tqdm(data_loader_train):
+    #     features = model(b[0].cuda()).cpu()
+    #     features = F.normalize(features, dim=1).cpu()
+    #
+    #     train_features.append(features)
+    #     train_targets.append(b[1])
+    #
+    # train_features = torch.cat(train_features, dim=0).cuda()
+    # train_targets = torch.cat(train_targets, dim=0).cuda()
+    #
+    # for b in tqdm(data_loader_val):
+    #     features = model(b[0].cuda())
+    #     features = F.normalize(features, dim=1)
+    #
+    #     targets = b[1].cuda()
+    #
+    #     batch_size = targets.shape[0]
+    #
+    #     similarity = torch.mm(features, train_features.T)
+    #
+    #     distances, indices = similarity.topk(k, largest=True, sorted=True)
+    #     distances = distances.cuda()
+    #     indices = indices.cuda()
+    #
+    #     candidates = train_targets.view(1, -1).expand(batch_size, -1)
+    #     retrieved_neighbors = torch.gather(candidates, 1, indices)
+    #
+    #     retrieval_one_hot.resize_(batch_size * k, args.nb_classes).zero_()
+    #     retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
+    #     # print("retrieval_one_hot", retrieval_one_hot)
+    #     distances_transform = distances.clone().div_(0.03).exp_()
+    #     # print("distances_transform", distances_transform)
+    #     probs = torch.sum(
+    #         torch.mul(
+    #             retrieval_one_hot.view(batch_size, -1, args.nb_classes),
+    #             distances_transform.view(batch_size, -1, 1),
+    #         ),
+    #         1,
+    #     )
+    #     _, predictions = probs.sort(1, True)
+    #
+    #     correct = predictions.eq(targets.data.view(-1, 1))
+    #     top1 = top1 + correct.narrow(1, 0, 1).sum().item()
+    #     top5 = top5 + correct.narrow(1, 0, 5).sum().item()
+    #     total += targets.size(0)
+    #
+    # top1 = top1 * 100.0 / total
+    # top5 = top5 * 100.0 / total
+    #
+    # print(f"top1: {top1}  top5: {top5}")
+
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='byol')
@@ -224,6 +291,17 @@ if __name__ == '__main__':
 
     parser.add_argument("--warmup-epochs", default=4, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
+
+    parser.add_argument('--drop', type=float, default=0.0, metavar='PCT',
+                        help='Dropout rate (default: 0.)')
+    parser.add_argument('--drop-path', type=float, default=0.1, metavar='PCT',
+                        help='Drop path rate (default: 0.1)')
+
+    parser.add_argument('--model-ema', action='store_true')
+    parser.add_argument('--no-model-ema', action='store_false', dest='model_ema')
+    parser.set_defaults(model_ema=True)
+    parser.add_argument('--model-ema-decay', type=float, default=0.99996, help='')
+    parser.add_argument('--model-ema-force-cpu', action='store_true', default=False, help='')
 
     # Optimizer parameters
     parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
@@ -277,6 +355,14 @@ if __name__ == '__main__':
     parser.add_argument('--repeated-aug', action='store_true')
     parser.add_argument('--no-repeated-aug', action='store_false', dest='repeated_aug')
     parser.set_defaults(repeated_aug=True)
+
+    # Distillation parameters
+    parser.add_argument('--teacher-model', default='regnety_160', type=str, metavar='MODEL',
+                        help='Name of teacher model to train (default: "regnety_160"')
+    parser.add_argument('--teacher-path', type=str, default='')
+    parser.add_argument('--distillation-type', default='none', choices=['none', 'soft', 'hard'], type=str, help="")
+    parser.add_argument('--distillation-alpha', default=0.5, type=float, help="")
+    parser.add_argument('--distillation-tau', default=1.0, type=float, help="")
 
     # * Random Erase params
     parser.add_argument('--reprob', type=float, default=0.25, metavar='PCT',
