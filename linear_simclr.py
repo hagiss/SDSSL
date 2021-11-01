@@ -71,7 +71,7 @@ class PLLearner(pl.LightningModule):
         self.ratio = args.ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
-        self.temperature = args.temperature
+        self.temperature = 0.1
 
         self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
 

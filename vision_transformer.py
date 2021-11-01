@@ -305,7 +305,7 @@ class VisionTransformer(nn.Module):
         return self.pos_drop(x)
 
     def forward(self, x, dino=False):
-        x = self.prepare_tokens(x, dino)
+        x = self.prepare_tokens(x, dino=dino)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
@@ -321,7 +321,7 @@ class VisionTransformer(nn.Module):
                 return blk(x, return_attention=True)
 
     def get_intermediate_layers(self, x, n=1, dino=False):
-        x = self.prepare_tokens(x, dino)
+        x = self.prepare_tokens(x, dino=dino)
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
