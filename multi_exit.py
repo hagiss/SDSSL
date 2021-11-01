@@ -262,7 +262,7 @@ def main(args):
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
-        pin_memory=True,
+        pin_memory=False,
     )
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
@@ -281,7 +281,7 @@ def main(args):
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
     )
     print("loaded dataset!")
 
@@ -403,11 +403,11 @@ if __name__ == '__main__':
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
 
-    parser.add_argument('--lr', '-l', default=0.0002, type=float, help='learning rate')
+    parser.add_argument('--lr', '-l', default=0.002, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=100, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=2048, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=3, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=5, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')

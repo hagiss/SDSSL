@@ -297,10 +297,10 @@ class VisionTransformer(nn.Module):
             x = torch.cat((cls_tokens, x), dim=1)
 
         # add positional encoding to each token
-        if pos_embed is not None:
-            x = x + pos_embed
-        else:
-            x = x + self.pos_embed
+        # if pos_embed is not None:
+        #     x = x + pos_embed
+        # else:
+        x = x + self.pos_embed
 
         return self.pos_drop(x)
 
