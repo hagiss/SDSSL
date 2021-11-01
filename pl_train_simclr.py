@@ -201,7 +201,7 @@ class PLLearner(pl.LightningModule):
             self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
         logits = logits / 0.1
-        return self.criterion(logits, self.label)
+        return self.criterion(logits, self.label) * 0.2
 
     def info_nce_loss_intermediate(self, layer_features, output):
         b = layer_features.shape[0]
@@ -238,7 +238,7 @@ class PLLearner(pl.LightningModule):
             self.label_int = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
         logits = logits / 0.1
-        return self.criterion(logits, self.label_int)
+        return self.criterion(logits, self.label_int) * 0.2
 
         # logits = similarity_matrix / 0.1
         # loss = self.criterion(logits, labels)
