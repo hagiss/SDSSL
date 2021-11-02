@@ -207,8 +207,6 @@ class PLLearner(pl.LightningModule):
         else:
             loss = loss_fn(student_output1, teacher_output1).mean()
             loss += loss_fn(student_output2, teacher_output2).mean()
-            if self.st_inter:
-                loss *= 12
 
         loss += loss_pred
 
