@@ -188,16 +188,19 @@ class PLLearner(pl.LightningModule):
             teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
             teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
 
-            student_mid_pred1 = self.student.predict(student_mid1.detach())
-            student_mid_pred2 = self.student.predict(student_mid2.detach())
+            student_mid_pred1 = self.student.predict(student_mid1.detach(), d=11)
+            student_mid_pred2 = self.student.predict(student_mid2.detach(), d=11)
             loss_pred = loss_fn(student_mid_pred1, teacher_mid1).mean()
             loss_pred += loss_fn(student_mid_pred2, teacher_mid2).mean()
-            loss_pred *= 12
+            loss_pred *= 11
 
-        student_output1 = self.student.predict(student_output1)
-        student_output2 = self.student.predict(student_output2)
+        student_output1 = self.student.predict(student_output1, d=1)
+        student_output2 = self.student.predict(student_output2, d=1)
 
         if self.ratio > 0:
+            student_mid1 = self.student.predict(student_mid1, d=11)
+            student_mid2 = self.student.predict(student_mid2, d=11)
+
             loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
             loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
             loss = loss_output + self.ratio * loss_mid

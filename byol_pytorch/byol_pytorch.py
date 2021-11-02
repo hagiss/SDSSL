@@ -131,14 +131,16 @@ class NetWrapper(nn.Module):
         return ret
 
     # x.shape is [12 * batch, out_dim]
-    def predict(self, x):
+    def predict(self, x, d=12):
         if self.predictor is None:
             return x
 
         if self.intermediate:
             ret = []
-            projections = rearrange(x, "(d b) e -> d b e", d=12)
+            projections = rearrange(x, "(d b) e -> d b e", d=d)
             for i, predictor in enumerate(self.predictor):
+                if i == d:
+                    break
                 prediction = predictor(projections[i, :])
                 ret.append(prediction)
 
