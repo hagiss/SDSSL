@@ -149,8 +149,7 @@ class Tuner(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x, label = batch
 
-        loss, logits, _ = self.forward(x, label)
-        print(logits[-1].shape)
+        loss, logits = self.forward(x, label)
 
         accuracy = [self.flat_accuracy(l.detach().cpu().numpy(), label.cpu().numpy()) for l in logits]
 
