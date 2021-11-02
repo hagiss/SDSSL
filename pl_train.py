@@ -183,26 +183,21 @@ class PLLearner(pl.LightningModule):
             teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
             teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
-            student_output_pred1 = self.student.predict(student_output1.detach())
-            student_output_pred2 = self.student.predict(student_output2.detach())
-            loss_pred = loss_fn(student_output_pred1, teacher_output1).mean()
-            loss_pred += loss_fn(student_output_pred2, teacher_output2).mean()
+            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+
+            student_mid_pred1 = self.student.predict(student_mid1.detach())
+            student_mid_pred2 = self.student.predict(student_mid2.detach())
+            loss_pred = loss_fn(student_mid_pred1, teacher_mid1).mean()
+            loss_pred += loss_fn(student_mid_pred2, teacher_mid2).mean()
             loss_pred *= 12
 
         student_output1 = self.student.predict(student_output1)
         student_output2 = self.student.predict(student_output2)
 
         if self.ratio > 0:
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            # student_pred_mid1, _ = torch.split(student_output_pred1, [batch_size * 11, batch_size], dim=0)
-            # student_pred_mid2, _ = torch.split(student_output_pred2, [batch_size * 11, batch_size], dim=0)
-            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-
-            # loss_pred = loss_fn(student_pred_mid1, teacher_mid1).mean() + loss_fn(student_pred_mid2, teacher_mid2).mean()
-            # loss_pred *= 10
-
             loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
             loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
             loss = loss_output + self.ratio * loss_mid
