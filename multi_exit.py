@@ -306,9 +306,9 @@ def main(args):
     args.image_size = image_size
     args.total_batch = total_batch
     args.optimizer = 'adamw'
-    args.st_inter = False
+    args.st_inter = True
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=len(data_loader),
