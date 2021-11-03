@@ -135,7 +135,7 @@ class NetWrapper(nn.Module):
         if self.predictor is None:
             return x
 
-        if self.intermediate:
+        if self.intermediate and d > 1:
             ret = []
             projections = rearrange(x, "(d b) e -> d b e", d=d)
             for i, predictor in enumerate(self.predictor):
@@ -145,6 +145,8 @@ class NetWrapper(nn.Module):
                 ret.append(prediction)
 
             return torch.cat(ret)
+        elif self.intermediate:
+            return self.predictor[-1](x)
         return self.predictor(x)
 
 
