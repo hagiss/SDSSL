@@ -71,6 +71,7 @@ class PLLearner(pl.LightningModule):
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
         self.temperature = args.temperature
+        self.up = args.up
 
         self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
 
@@ -168,7 +169,7 @@ class PLLearner(pl.LightningModule):
         image_one, image_two = self.aug1(x), self.aug2(x)
         return self.student(torch.cat((image_one, image_two), dim=0)) #), self.student(image_two)
 
-    def info_nce_loss(self, features):
+    def info_nce_loss(self, features, t_features=None):
         b, _ = features.shape
         if self.labels is None:
             self.labels = torch.cat([torch.arange(b/2) for i in range(2)], dim=0)
@@ -179,7 +180,11 @@ class PLLearner(pl.LightningModule):
             self.labels.to(self.device)
 
         features = F.normalize(features, dim=1)
-        output = concat_all_gather(features)
+        if t_features is None:
+            t_features = features
+        else:
+            t_features = F.normalize(t_features, dim=1)
+        output = concat_all_gather(t_features)
 
         similarity_matrix = torch.matmul(features, output.T)
 
@@ -259,9 +264,17 @@ class PLLearner(pl.LightningModule):
 
         loss_mid = 0.0
         if self.st_inter != self.t_inter:
-            student_mid, student_output = torch.split(student_output, [batch_size * 11, batch_size], dim=0)
+            # student_mid, student_output = torch.split(student_output, [batch_size * 11, batch_size], dim=0)
             # student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_intermediate(student_mid, student_output.detach())
+            # loss_mid = self.info_nce_loss_intermediate(student_mid, student_output.detach())
+            outputs = torch.chunk(student_output, 12, dim=0)
+            for i, o in enumerate(outputs):
+                if i == 11:
+                    break
+                up = max(i + self.up, 11)
+                loss_mid += self.info_nce_loss(o, outputs[up])
+            loss_mid /= 11.0
+            student_output = outputs[-1]
         loss_output = self.info_nce_loss(student_output)
         # if self.ratio > 0:
         #     ratio = self.ratio
@@ -575,70 +588,44 @@ if __name__ == '__main__':
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
 
-    parser.add_argument('--lr', '-l', default=1e-5, type=float, help='learning rate')
+    parser.add_argument('--lr', '-l', default=1.4e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
-    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
-    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
+    parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
+    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
+    parser.add_argument('--num_workers', '-n', type=int, default=5, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
-    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
-    parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
+    parser.add_argument('--ratio', default=0.6, type=float, help='loss ratio of layer2output')
+    parser.add_argument('--up', default=0, type=int, help='layer2high skip layer')
+    parser.add_argument('--st_inter', default=True, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
     parser.add_argument('--temperature', default=0.1, type=float, help='temperature for infoNCE')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
-    parser.add_argument('--dataset', '-ds', default='stl10',
+    parser.add_argument('--dataset', '-ds', default='imagenet',
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
     parser.add_argument('--name', help='name for tensorboard')
-    parser.add_argument('--val_interval', default=1, type=int, help='validation epoch interval')
+    parser.add_argument('--val_interval', default=20, type=int, help='validation epoch interval')
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
-
-    parser.add_argument("--warmup_epochs", default=10, type=int,
+    parser.add_argument("--warmup_epochs", default=40, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
-    parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
+    parser.add_argument('--min_lr', type=float, default=0, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
     # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
     #     during which we keep the output layer fixed. Typically doing so during
     #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
-    parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
+    parser.add_argument('--weight_decay', type=float, default=0.1, help="""Initial value of the
             weight decay. With ViT, a smaller value at the beginning of training works well.""")
-    parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
+    parser.add_argument('--weight_decay_end', type=float, default=0.1, help="""Final value of the
             weight decay. We use a cosine schedule for WD and using a larger decay by
             the end of training improves performance for ViTs.""")
-    parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
+    parser.add_argument('--clip_grad', type=float, default=0, help="""Maximal parameter
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
-
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
@@ -646,14 +633,14 @@ if __name__ == '__main__':
                                  'deit_small'] + torchvision_archs,
                         help="""Name of architecture to train. For quick experiments with ViTs,
                 we recommend using vit_tiny or vit_small.""")
-    parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
+    parser.add_argument('--patch_size', default=32, type=int, help="""Size in pixels
             of input square patches - default 16 (for 16x16 patches). Using smaller
             values leads to better performance but requires more memory. Applies only
             for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
             mixed precision training (--use_fp16 false) to avoid unstabilities.""")
-    parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of
+    parser.add_argument('--out_dim', default=256, type=int, help="""Dimensionality of
             the DINO head output. For complex and large datasets large values (like 65k) work well.""")
-    parser.add_argument('--div', default=4, type=int, help="dividing hidden dimensions of mlp1")
+    parser.add_argument('--div', default=1, type=int, help="dividing hidden dimensions of mlp1")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA
             parameter for teacher update. The value is increased to 1 during training with cosine schedule.
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
