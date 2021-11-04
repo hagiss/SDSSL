@@ -606,7 +606,7 @@ if __name__ == '__main__':
                         help='path to dataset')
     parser.add_argument('--dataset', '-ds', default='imagenet',
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
-    parser.add_argument('--name', help='name for tensorboard')
+    parser.add_argument('--name', default="simclr/abl", help='name for tensorboard')
     parser.add_argument('--val_interval', default=20, type=int, help='validation epoch interval')
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
