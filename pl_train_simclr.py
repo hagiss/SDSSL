@@ -57,6 +57,24 @@ def concat_all_gather(tensor):
     return output
 
 
+class GatherLayer(torch.autograd.Function):
+    """Gather tensors from all process, supporting backward propagation."""
+
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        output = [torch.zeros_like(input) for _ in range(dist.get_world_size())]
+        dist.all_gather(output, input)
+        return tuple(output)
+
+    @staticmethod
+    def backward(ctx, *grads):
+        (input,) = ctx.saved_tensors
+        grad_out = torch.zeros_like(input)
+        grad_out[:] = grads[dist.get_rank()]
+        return grad_out
+
+
 def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
@@ -179,7 +197,7 @@ class PLLearner(pl.LightningModule):
             self.labels.to(self.device)
 
         features = F.normalize(features, dim=1)
-        output = concat_all_gather(features)
+        output = torch.cat(GatherLayer.apply(features))
 
         similarity_matrix = torch.matmul(features, output.T)
 
@@ -201,14 +219,15 @@ class PLLearner(pl.LightningModule):
             self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
         logits = logits / 0.1
-        return self.criterion(logits, self.label) * 0.2
+        return self.criterion(logits, self.label)
 
     def info_nce_loss_intermediate(self, layer_features, output):
         b = layer_features.shape[0]
         output = F.normalize(output, dim=1)
         layer_features = F.normalize(layer_features, dim=1)
 
-        output = concat_all_gather(output)
+        # output = concat_all_gather(output)
+        output = torch.cat(GatherLayer.apply(output))
         similarity_matrix = torch.matmul(layer_features, output.T)
 
         # labels = torch.cat([torch.cat([torch.arange(b/22) for i in range(2)], dim=0) + int((b/11) * torch.distributed.get_rank()) for _ in range(11)], dim=0)
@@ -238,7 +257,7 @@ class PLLearner(pl.LightningModule):
             self.label_int = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
         logits = logits / 0.1
-        return self.criterion(logits, self.label_int) * 0.2
+        return self.criterion(logits, self.label_int)
 
         # logits = similarity_matrix / 0.1
         # loss = self.criterion(logits, labels)
