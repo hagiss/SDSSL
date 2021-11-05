@@ -197,7 +197,7 @@ class PLLearner(pl.LightningModule):
             self.labels.to(self.device)
 
         features = F.normalize(features, dim=1)
-        output = torch.cat(GatherLayer.apply(features))
+        output = torch.cat(GatherLayer.apply(features), dim=0)
 
         similarity_matrix = torch.matmul(features, output.T)
 
@@ -226,8 +226,7 @@ class PLLearner(pl.LightningModule):
         output = F.normalize(output, dim=1)
         layer_features = F.normalize(layer_features, dim=1)
 
-        # output = concat_all_gather(output)
-        output = torch.cat(GatherLayer.apply(output))
+        output = concat_all_gather(output)
         similarity_matrix = torch.matmul(layer_features, output.T)
 
         # labels = torch.cat([torch.cat([torch.arange(b/22) for i in range(2)], dim=0) + int((b/11) * torch.distributed.get_rank()) for _ in range(11)], dim=0)
