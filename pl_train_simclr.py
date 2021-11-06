@@ -164,6 +164,18 @@ class PLLearner(pl.LightningModule):
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
+        self.aug = torch.nn.sequential(
+            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
+            T.RandomHorizontalFlip(),
+            RandomApply(
+                T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+                p=0.8
+            ),
+            T.RandomGrayscale(p=0.2),
+            T.Normalize(
+                mean=torch.tensor([0.485, 0.456, 0.406]),
+                std=torch.tensor([0.229, 0.224, 0.225])),
+        )
         self.criterion = nn.CrossEntropyLoss()
         self.automatic_optimization = False
 
@@ -183,7 +195,7 @@ class PLLearner(pl.LightningModule):
         return [self.optimizer]
 
     def forward(self, x):
-        image_one, image_two = self.aug1(x), self.aug2(x)
+        image_one, image_two = self.aug(x), self.aug(x)
         return self.student(torch.cat((image_one, image_two), dim=0)) #), self.student(image_two)
 
     def info_nce_loss(self, features):
@@ -218,7 +230,7 @@ class PLLearner(pl.LightningModule):
         if self.label is None:
             self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
-        logits = logits / 0.1
+        logits = logits / 0.2
         return self.criterion(logits, self.label)
 
     def info_nce_loss_intermediate(self, layer_features, output):
@@ -255,7 +267,7 @@ class PLLearner(pl.LightningModule):
         if self.label_int is None:
             self.label_int = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
-        logits = logits / 0.1
+        logits = logits / 0.2
         return self.criterion(logits, self.label_int)
 
         # logits = similarity_matrix / 0.1
