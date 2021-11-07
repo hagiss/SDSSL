@@ -499,6 +499,7 @@ def main(args):
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
+        pin_memory=True,
     )
     fine_loader = DataLoader(
         fine_dataset,
@@ -516,6 +517,7 @@ def main(args):
         # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
@@ -523,6 +525,7 @@ def main(args):
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     print("loaded dataset!")
 
