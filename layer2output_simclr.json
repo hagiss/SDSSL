@@ -10,7 +10,7 @@
   "epochs": 300,
   "max_epochs": 300,
   "mlp_hidden": 4096,
-  "lr": 1.4e-4,
+  "lr": 1.3e-4,
   "warmup_epochs": 40,
   "min_lr": 0,
   "seed": 0,
