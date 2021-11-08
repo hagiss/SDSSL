@@ -22,7 +22,7 @@ import vision_transformer as vits
 from byol_pytorch import NetWrapper
 import fine_tune
 import sys
-from pl_train_moco import PLLearner
+from pl_train import PLLearner
 from tqdm import tqdm
 
 from PIL import Image
@@ -306,9 +306,9 @@ def main(args):
     args.image_size = image_size
     args.total_batch = total_batch
     args.optimizer = 'adamw'
-    args.st_inter = True
+    args.st_inter = False
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/byol_base.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=len(data_loader),

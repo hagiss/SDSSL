@@ -61,8 +61,8 @@ class PLLearner(pl.LightningModule):
 
         teacher.load_state_dict(student.state_dict())
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter, last_bn=True)
-        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter, last_bn=True)
+        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter, last_bn=False)
+        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter, last_bn=False)
 
         if self.st_inter != self.t_inter:
             self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
