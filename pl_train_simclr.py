@@ -205,8 +205,8 @@ class PLLearner(pl.LightningModule):
         if self.label is None:
             self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
-        logits = logits / 0.1
-        return self.criterion(logits, self.label) * 0.2
+        logits = logits / 0.2
+        return self.criterion(logits, self.label)
 
     def info_nce_loss_intermediate(self, layer_features, output):
         b = layer_features.shape[0]
@@ -242,8 +242,8 @@ class PLLearner(pl.LightningModule):
         if self.label_int is None:
             self.label_int = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
 
-        logits = logits / 0.1
-        return self.criterion(logits, self.label_int) * 0.2
+        logits = logits / 0.2
+        return self.criterion(logits, self.label_int)
 
         # logits = similarity_matrix / 0.1
         # loss = self.criterion(logits, labels)
@@ -588,7 +588,7 @@ if __name__ == '__main__':
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
 
-    parser.add_argument('--lr', '-l', default=1.4e-4, type=float, help='learning rate')
+    parser.add_argument('--lr', '-l', default=1.3e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
@@ -600,7 +600,7 @@ if __name__ == '__main__':
     parser.add_argument('--up', default=0, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=True, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
-    parser.add_argument('--temperature', default=0.1, type=float, help='temperature for infoNCE')
+    parser.add_argument('--temperature', default=0.2, type=float, help='temperature for infoNCE')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
