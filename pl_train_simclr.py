@@ -305,7 +305,7 @@ class PLLearner(pl.LightningModule):
             for i, o in enumerate(outputs):
                 if i == 11:
                     break
-                up = max(i + self.up, 11)
+                up = min(i + self.up, 11)
                 loss_mid += self.info_nce_loss(o, outputs[up])
             loss_mid /= 11.0
             student_output = outputs[-1]
@@ -563,6 +563,9 @@ def main(args):
 
     # student = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
     # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
+    args.multi_node = 1
+    args.optimizer = "adamw"
+    args.name = "moco_abl"
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
@@ -629,7 +632,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=5, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=4, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
