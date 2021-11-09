@@ -142,9 +142,9 @@ def main(args):
     args.total_batch = 1024
     args.weight_decay_end = 0.1
 
-    args.st_inter = False
+    args.st_inter = True
 
-    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    learner = MOCO.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=0,
@@ -289,7 +289,7 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    parser.add_argument("--warmup-epochs", default=4, type=int,
+    parser.add_argument("--warmup-epochs", default=3, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
 
     parser.add_argument('--drop', type=float, default=0.0, metavar='PCT',

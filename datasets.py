@@ -30,7 +30,7 @@ def build_transform(is_train, args):
 
 
 def build_dataset(is_train, args):
-    transform = build_transform(False, args)
+    transform = build_transform(is_train, args)
 
     if args.data_set == 'imagenet':
         raise NotImplementedError("Only [cifar10, cifar100, flowers, pets] are supported; \
