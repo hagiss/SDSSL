@@ -240,6 +240,7 @@ class PLLearner(pl.LightningModule):
         teacher_output1 = concat_all_gather(teacher_output1)
         teacher_output2 = concat_all_gather(teacher_output2)
 
+        loss_2p = 0
         if self.st_inter:
             """manual update for predictor"""
             student_detached1 = self.student.predict(student_output1.detach())
@@ -468,8 +469,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
-        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = 'dataset'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -545,6 +546,10 @@ def main(args):
     # student = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
     # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
 
+    args.multi_node = 1
+    args.optimizer = "adamw"
+    args.name = "moco_abl"
+
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
     total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu * args.multi_node
@@ -607,7 +612,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', '-l', default=1.5e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
-    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
+    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=12, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=5, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
