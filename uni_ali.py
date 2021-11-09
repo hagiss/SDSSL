@@ -125,7 +125,7 @@ def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
-            drop_path_rate=0.1,  # stochastic depth
+            # drop_path_rate=0.1,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
