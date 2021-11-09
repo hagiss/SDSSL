@@ -103,7 +103,7 @@ class PLLearner(pl.LightningModule):
         self.ratio_schedule = utils.cosine_scheduler(
             0, args.ratio,
             args.epochs, length,
-            warmup_epochs=args.warmup_epochs,
+            # warmup_epochs=args.warmup_epochs,
         )
 
         # print(length)
@@ -172,7 +172,7 @@ class PLLearner(pl.LightningModule):
 
         images = batch[0]
         batch_size = images.shape[0]
-
+        self.update_lr()
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)

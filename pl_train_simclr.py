@@ -57,6 +57,24 @@ def concat_all_gather(tensor):
     return output
 
 
+class GatherLayer(torch.autograd.Function):
+    """Gather tensors from all process, supporting backward propagation."""
+
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        output = [torch.zeros_like(input) for _ in range(dist.get_world_size())]
+        dist.all_gather(output, input)
+        return tuple(output)
+
+    @staticmethod
+    def backward(ctx, *grads):
+        (input,) = ctx.saved_tensors
+        grad_out = torch.zeros_like(input)
+        grad_out[:] = grads[dist.get_rank()]
+        return grad_out
+
+
 def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
@@ -147,6 +165,18 @@ class PLLearner(pl.LightningModule):
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
+        # self.aug = torch.nn.sequential(
+        #     T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
+        #     T.RandomHorizontalFlip(),
+        #     RandomApply(
+        #         T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+        #         p=0.8
+        #     ),
+        #     T.RandomGrayscale(p=0.2),
+        #     T.Normalize(
+        #         mean=torch.tensor([0.485, 0.456, 0.406]),
+        #         std=torch.tensor([0.229, 0.224, 0.225])),
+        # )
         self.criterion = nn.CrossEntropyLoss()
         self.automatic_optimization = False
 
@@ -183,8 +213,8 @@ class PLLearner(pl.LightningModule):
         if t_features is None:
             t_features = features
         else:
-            t_features = F.normalize(t_features, dim=1)
-        output = concat_all_gather(t_features)
+            t_features = F.normalize(t_features.detach(), dim=1)
+        output = torch.cat(GatherLayer.apply(t_features), dim=0)
 
         similarity_matrix = torch.matmul(features, output.T)
 
@@ -482,6 +512,7 @@ def main(args):
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
+        pin_memory=True,
     )
     fine_loader = DataLoader(
         fine_dataset,
@@ -499,6 +530,7 @@ def main(args):
         # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
@@ -506,6 +538,7 @@ def main(args):
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
+        pin_memory=True,
     )
     print("loaded dataset!")
 
