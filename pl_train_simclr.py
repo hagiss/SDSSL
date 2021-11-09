@@ -90,6 +90,7 @@ class PLLearner(pl.LightningModule):
         self.t_inter = args.t_inter
         self.temperature = args.temperature
         self.up = args.up
+        self.same_view = args.same_view
 
         self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
 
@@ -214,6 +215,9 @@ class PLLearner(pl.LightningModule):
             t_features = features
         else:
             t_features = F.normalize(t_features.detach(), dim=1)
+            if self.same_view:
+                temp = torch.chunk(t_features, 2, dim=0)
+                t_features = torch.cat((temp[1], temp[0]), dim=0)
         output = torch.cat(GatherLayer.apply(t_features), dim=0)
 
         similarity_matrix = torch.matmul(features, output.T)
@@ -634,6 +638,7 @@ if __name__ == '__main__':
     parser.add_argument('--st_inter', default=True, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
     parser.add_argument('--temperature', default=0.2, type=float, help='temperature for infoNCE')
+    parser.add_argument('--same-view', default=False, type=utils.bool_flag, help='learn from same view')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
