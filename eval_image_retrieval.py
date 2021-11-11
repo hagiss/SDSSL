@@ -24,7 +24,7 @@ import numpy as np
 import vision_transformer as vits
 
 from PIL import Image
-from pl_train_moco import PLLearner
+from pl_train_simclr import PLLearner
 
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
@@ -157,19 +157,20 @@ def main(args):
     args.image_size = 224
     args.total_batch = total_batch
     args.optimizer = 'adamw'
+    args.temperature = 0.2
 
-    args.st_inter = True
+    args.st_inter = False
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
                                              student=student,
-                                             teacher=teacher,
+                                             # teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.teacher
+    model = learner.student.net
 
-    model = model.net
+    # model = model.net
 
     # model.load_state_dict(torch.hub.load_state_dict_from_url(
     #     url="https://dl.fbaipublicfiles.com/dino/dino_vitsmall16_googlelandmark_pretrain/dino_vitsmall16_googlelandmark_pretrain.pth"))

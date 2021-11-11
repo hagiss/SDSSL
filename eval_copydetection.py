@@ -17,7 +17,7 @@ import numpy as np
 import vision_transformer as vits
 
 from PIL import Image
-from pl_train_moco import PLLearner
+from pl_train_simclr import PLLearner
 
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
@@ -160,14 +160,18 @@ def extract_features(image_list, model, args):
     features = None
     for samples, index in data_loader:
         samples, index = samples.cuda(non_blocking=True), index.cuda(non_blocking=True)
-        feats = model.get_intermediate_layers_all(samples, n=2)
+        feats = model.get_intermediate_layers_all(samples, n=args.n)
 
         # print(feats.shape)
 
         cls_output_token = feats[0][:, 0, :]  #  [CLS] token
         # cls_output_token = cls_output_token.unsqueeze(0)
         # GeM with exponent 4 for output patch tokens
+        # print(feats[0][:, 1:, :].shape)
+        # print(samples.shape[-2])
+
         b, h, w, d = len(samples), int(samples.shape[-2] / model.patch_embed.patch_size[0]), int(samples.shape[-1] / model.patch_embed.patch_size[1]), feats[0].shape[-1]
+        # print(b, h, w, d)
         feats = feats[0][:, 1:, :].reshape(b, h, w, d)
         # feats = feats.unsqueeze(0).reshape(b, h, w, d)
         feats = feats.clamp(min=1e-6).permute(0, 3, 1, 2)
@@ -222,17 +226,18 @@ def main(args):
     args.image_size = 224
     args.total_batch = 100
     args.optimizer = 'adamw'
+    args.temperature = 0.2
 
     args.st_inter = False
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.teacher
+    model = learner.student
 
     model = model.net
 
@@ -374,6 +379,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
     parser.add_argument('--student', default=False, type=utils.bool_flag, help='choose student or teacher network')
+    parser.add_argument('--n', default=1, type=int, help="representation layer")
 
     hparam = parser.parse_args()
     if hparam.load_json:

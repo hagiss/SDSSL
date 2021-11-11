@@ -199,45 +199,6 @@ class VisionTransformer(nn.Module):
             self.patch_embed.proj.weight.requires_grad = False
             self.patch_embed.proj.bias.requires_grad = False
 
-    # def _init_weights(self, m):
-    #     if isinstance(m, nn.Linear):
-    #         trunc_normal_(m.weight, std=.02)
-    #         if isinstance(m, nn.Linear) and m.bias is not None:
-    #             nn.init.constant_(m.bias, 0)
-    #     elif isinstance(m, nn.LayerNorm):
-    #         nn.init.constant_(m.bias, 0)
-    #         nn.init.constant_(m.weight, 1.0)
-
-    # def interpolate_pos_encoding(self, x, w, h):
-    #     sub_patch_num = 2 if self.dis_token is not None else 1
-    #     npatch = x.shape[1] - sub_patch_num
-    #     N = self.pos_embed.shape[1] - sub_patch_num
-    #     if npatch == N and w == h:
-    #         return self.pos_embed
-    #     class_pos_embed = self.pos_embed[:, 0]
-    #     if self.dis_token is not None:
-    #         patch_pos_embed = self.pos_embed[:, 1:-1]
-    #         dis_pos_embed = self.pos_embed[:, -1]
-    #     else:
-    #         patch_pos_embed = self.pos_embed[:, 1:]
-    #     dim = x.shape[-1]
-    #     w0 = w // self.patch_embed.patch_size
-    #     h0 = h // self.patch_embed.patch_size
-    #     # we add a small number to avoid floating point error in the interpolation
-    #     # see discussion at https://github.com/facebookresearch/dino/issues/8
-    #     w0, h0 = w0 + 0.1, h0 + 0.1
-    #     patch_pos_embed = nn.functional.interpolate(
-    #         patch_pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
-    #         scale_factor=(w0 / math.sqrt(N), h0 / math.sqrt(N)),
-    #         mode='bicubic',
-    #     )
-    #     assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
-    #     patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-    #     if self.dis_token is not None:
-    #         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed, dis_pos_embed.unsqueeze(0)), dim=1)
-    #     else:
-    #         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
-
     def build_2d_sincos_position_embedding(self, temperature=10000.):
         h, w = self.patch_embed.grid_size
         grid_w = torch.arange(w, dtype=torch.float32)
@@ -297,10 +258,10 @@ class VisionTransformer(nn.Module):
             x = torch.cat((cls_tokens, x), dim=1)
 
         # add positional encoding to each token
-        # if pos_embed is not None:
-        #     x = x + pos_embed
-        # else:
-        x = x + self.pos_embed
+        if pos_embed is not None:
+            x = x + pos_embed
+        else:
+            x = x + self.pos_embed
 
         return self.pos_drop(x)
 
@@ -332,11 +293,20 @@ class VisionTransformer(nn.Module):
                 else:
                     output.append(self.norm(x)[:, 0])
 
-        # return torch.cat(output, dim=0)
-        return output
+        return torch.cat(output, dim=0)
+        # return output
+
+    def get_selfattention(self, x, j=1):
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - j:
+                x = blk(x)
+            else:
+                # return attention of the last block
+                return blk(x, return_attention=True)
 
     def get_intermediate_layers_all(self, x, n=1, dino=False):
-        m = nn.ZeroPad2d((0, 32, 0, 32))
+        m = nn.ZeroPad2d((0, 31, 0, 31))
         x = m(x)
         nc, c, w, h = x.shape
         x = x[:, :, :w - w % 32, :h - h % 32]

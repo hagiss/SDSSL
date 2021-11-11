@@ -415,8 +415,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
-        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = 'dataset'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -500,7 +500,7 @@ def main(args):
     args.total_batch = total_batch
     args.optimizer = 'adamw'
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
+    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
                                              student=student,
                                              length=len(data_loader),
                                              val_loader=val_loader,
@@ -510,7 +510,12 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tuner = fine_tune.Tuner(learner.student, embed_dim, total_batch, len(fine_loader1), args.lr)
+    model = learner.student
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
+
+    tuner = fine_tune.Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
     fine_trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
         max_epochs=100,
@@ -522,7 +527,7 @@ def main(args):
         check_val_every_n_epoch=10,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
+        # progress_bar_refresh_rate=0
     )
     fine_trainer.fit(tuner, fine_loader1, val_loader)
 
@@ -543,8 +548,8 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
-    parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
+    parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
+    parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
