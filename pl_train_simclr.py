@@ -208,7 +208,7 @@ class PLLearner(pl.LightningModule):
             self.labels = torch.cat(temp, dim=0).T
             self.labels.to(self.device)
 
-        features = F.normalize(features, dim=1)
+        # features = F.normalize(features, dim=1)
         output = torch.cat(GatherLayer.apply(features), dim=0)
 
         similarity_matrix = torch.matmul(features, output.T)
@@ -235,8 +235,8 @@ class PLLearner(pl.LightningModule):
 
     def info_nce_loss_intermediate(self, layer_features, output):
         b = layer_features.shape[0]
-        output = F.normalize(output, dim=1)
-        layer_features = F.normalize(layer_features, dim=1)
+        # output = F.normalize(output, dim=1)
+        # layer_features = F.normalize(layer_features, dim=1)
 
         output = concat_all_gather(output)
         similarity_matrix = torch.matmul(layer_features, output.T)
@@ -281,7 +281,7 @@ class PLLearner(pl.LightningModule):
         self.update_lr()
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        student_output = self.forward(images)
+        student_output = F.normalize(self.forward(images), dim=1)
 
         # if self.st_inter != self.t_inter:
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
