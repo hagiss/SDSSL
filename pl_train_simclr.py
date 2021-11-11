@@ -630,7 +630,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--lr', '-l', default=1.3e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
-    parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
+    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=4, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
