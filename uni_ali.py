@@ -377,7 +377,7 @@ def main(args):
         del features3_l2o[i]
         del features4_l2o[i]
 
-    r = 4
+    r = 7
     print('alignment', np.round(alignment, r))
     print('alignment_l2o', np.round(alignment_l2o, r))
 
