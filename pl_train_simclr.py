@@ -592,7 +592,7 @@ def main(args):
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
+        # progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
@@ -630,8 +630,8 @@ if __name__ == '__main__':
                         help='Load settings from file in json format. Command line options override values in file.')
 
     parser.add_argument('--lr', '-l', default=1.5e-4, type=float, help='learning rate')
-    parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
-    parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
+    parser.add_argument('--epochs', '-e', type=int, default=100, help="epochs for scheduling")
+    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=4, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
@@ -653,7 +653,7 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    parser.add_argument("--warmup_epochs", default=40, type=int,
+    parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=0, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
