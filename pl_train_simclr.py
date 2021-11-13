@@ -90,7 +90,7 @@ class PLLearner(pl.LightningModule):
         self.t_inter = args.t_inter
         self.temperature = args.temperature
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
+        self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter, last_bn=False, proj_bn=args.proj_bn, pred_bn=args.pred_bn)
 
         print(f"Student is built: {args.arch} network.")
 
@@ -620,7 +620,10 @@ if __name__ == '__main__':
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
-    parser.add_argument('--temperature', default=0.1, type=float, help='temperature for infoNCE')
+    parser.add_argument('--temperature', default=0.2, type=float, help='temperature for infoNCE')
+    parser.add_argument('--same-view', default=False, type=utils.bool_flag, help='learn from same view')
+    parser.add_argument('--proj_bn', default=False, type=utils.bool_flag, help='projector batch norm')
+    parser.add_argument('--pred_bn', default=False, type=utils.bool_flag, help='predictor batch norm')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')

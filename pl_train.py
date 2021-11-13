@@ -63,7 +63,7 @@ class PLLearner(pl.LightningModule):
 
         teacher.load_state_dict(student.state_dict())
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter, last_bn=False)
+        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter, last_bn=False, proj_bn=args.proj_bn, pred_bn=args.pred_bn)
         self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter, last_bn=False)
 
         if self.st_inter != self.t_inter:
@@ -553,6 +553,8 @@ if __name__ == '__main__':
     parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
     parser.add_argument('--p_loss', default=1.0, type=float, help="predictor loss for byol")
     parser.add_argument('--p2_loss', default=0.0, type=float, help="predictor loss for byol")
+    parser.add_argument('--proj_bn', default=False, type=utils.bool_flag, help='projector batch norm')
+    parser.add_argument('--pred_bn', default=False, type=utils.bool_flag, help='predictor batch norm')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
