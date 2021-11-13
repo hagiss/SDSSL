@@ -482,8 +482,11 @@ def main(args):
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
-    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu * args.multi_node
+    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
     clip = args.clip_grad
+
+    args.optimizer = "adamw"
+    args.name = "simclr_abl"
 
     args.image_size = image_size
     args.total_batch = total_batch
@@ -547,7 +550,7 @@ if __name__ == '__main__':
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
-    parser.add_argument('--ratio', default=0.6, type=float, help='loss ratio of layer2output')
+    parser.add_argument('--ratio', default=0, type=float, help='loss ratio of layer2output')
     parser.add_argument('--up', default=0, type=int, help='layer2high skip layer')
     parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
