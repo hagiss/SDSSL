@@ -639,7 +639,7 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=0.6, type=float, help='loss ratio of layer2output')
     parser.add_argument('--up', default=0, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=True, type=bool, help='intermediate representation of student')
+    parser.add_argument('--st_inter', default=True, type=utils.bool_flag, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
     parser.add_argument('--temperature', default=0.2, type=float, help='temperature for infoNCE')
     parser.add_argument('--same-view', default=False, type=utils.bool_flag, help='learn from same view')
