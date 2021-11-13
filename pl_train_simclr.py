@@ -518,15 +518,15 @@ def main(args):
         drop_last=True,
         pin_memory=True,
     )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
-        batch_size=512,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
-    )
+    # fine_loader = DataLoader(
+    #     fine_dataset,
+    #     # Subset(fine_dataset, np.arange(64)),
+    #     batch_size=512,
+    #     shuffle=True,
+    #     num_workers=args.num_workers,
+    #     drop_last=True,
+    #     pin_memory=True,
+    # )
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
@@ -549,6 +549,7 @@ def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
+            img_size=[image_size]
             # drop_path_rate=0.1,  # stochastic depth
         )
         # teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
@@ -628,10 +629,10 @@ if __name__ == '__main__':
     parser.add_argument('--load_json',
                         help='Load settings from file in json format. Command line options override values in file.')
 
-    parser.add_argument('--lr', '-l', default=1.3e-4, type=float, help='learning rate')
+    parser.add_argument('--lr', '-l', default=1.5e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
-    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
-    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
+    parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
+    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=4, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
@@ -645,7 +646,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
-    parser.add_argument('--dataset', '-ds', default='imagenet',
+    parser.add_argument('--dataset', '-ds', default='stl10',
                         help='dataset name', choices=['stl10', 'cifar10', 'imagenet'])
     parser.add_argument('--name', default="simclr/abl", help='name for tensorboard')
     parser.add_argument('--val_interval', default=20, type=int, help='validation epoch interval')
