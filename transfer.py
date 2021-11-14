@@ -34,7 +34,6 @@ from pl_train_simclr import PLLearner as SimCLR
 from datasets import build_dataset
 import pytorch_lightning as pl
 
-
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            if name.islower() and not name.startswith("__")
                            and callable(torchvision_models.__dict__[name]))
@@ -118,6 +117,7 @@ class PLLearner(pl.LightningModule):
         if utils.get_rank() == 0:
             print(f"Epoch: {self.current_epoch}  acc: {accuracy.item()}  best: {self.best}")
 
+
 def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
@@ -143,15 +143,13 @@ def main(args):
     args.weight_decay_end = 0.1
     args.temperature = 0.2
 
-    args.st_inter = False
-
-    learner = SimCLR.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
-                                             student=student,
-                                             teacher=teacher,
-                                             length=0,
-                                             val_loader=None,
-                                             embed_dim=embed_dim,
-                                             args=args)
+    learner = SimCLR.load_from_checkpoint(args.ckpt,
+                                          student=student,
+                                          # teacher=teacher,
+                                          length=0,
+                                          val_loader=None,
+                                          embed_dim=embed_dim,
+                                          args=args)
     model = learner.student
     model = model.net
 
@@ -183,83 +181,81 @@ def main(args):
         pin_memory=False,
         drop_last=False
     )
+    if args.knn is False:
+        learner = PLLearner(model, args.nb_classes, args)
 
-    learner = PLLearner(model, args.nb_classes, args)
-
-    trainer = pl.Trainer(
-        gpus=torch.cuda.device_count(),
-        max_epochs=100,
-        default_root_dir="output/vit.model",
-        accelerator="ddp",
-        num_sanity_val_steps=0,
-        check_val_every_n_epoch=10,
-        sync_batchnorm=True,
-    )
-    trainer.fit(learner, data_loader_train, data_loader_val)
-
+        trainer = pl.Trainer(
+            gpus=torch.cuda.device_count(),
+            max_epochs=100,
+            default_root_dir="output/vit.model",
+            accelerator="ddp",
+            num_sanity_val_steps=0,
+            check_val_every_n_epoch=10,
+            sync_batchnorm=True,
+        )
+        trainer.fit(learner, data_loader_train, data_loader_val)
 
     ###################################### KNN
-    # model.eval()
-    # model.cuda()
-    #
-    # train_features = []
-    # train_targets = []
-    # k = 20
-    # retrieval_one_hot = torch.zeros(k, args.nb_classes).cuda()
-    # top1, top5, total = 0.0, 0.0, 0
-    #
-    # for b in tqdm(data_loader_train):
-    #     features = model(b[0].cuda()).detach()
-    #     features = F.normalize(features, dim=1).cpu()
-    #
-    #     train_features.append(features)
-    #     train_targets.append(b[1])
-    #
-    # train_features = torch.cat(train_features, dim=0).cuda()
-    # train_targets = torch.cat(train_targets, dim=0).cuda()
-    #
-    # for b in tqdm(data_loader_val):
-    #     features = model(b[0].cuda()).detach()
-    #     features = F.normalize(features, dim=1)
-    #
-    #     targets = b[1].cuda()
-    #
-    #     batch_size = targets.shape[0]
-    #
-    #     similarity = torch.mm(features, train_features.T)
-    #
-    #     distances, indices = similarity.topk(k, largest=True, sorted=True)
-    #     distances = distances.cuda()
-    #     indices = indices.cuda()
-    #
-    #     candidates = train_targets.view(1, -1).expand(batch_size, -1)
-    #     retrieved_neighbors = torch.gather(candidates, 1, indices)
-    #
-    #     retrieval_one_hot.resize_(batch_size * k, args.nb_classes).zero_()
-    #     retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
-    #     # print("retrieval_one_hot", retrieval_one_hot)
-    #     distances_transform = distances.clone().div_(0.03).exp_()
-    #     # print("distances_transform", distances_transform)
-    #     probs = torch.sum(
-    #         torch.mul(
-    #             retrieval_one_hot.view(batch_size, -1, args.nb_classes),
-    #             distances_transform.view(batch_size, -1, 1),
-    #         ),
-    #         1,
-    #     )
-    #     _, predictions = probs.sort(1, True)
-    #
-    #     correct = predictions.eq(targets.data.view(-1, 1))
-    #     top1 = top1 + correct.narrow(1, 0, 1).sum().item()
-    #     top5 = top5 + correct.narrow(1, 0, 5).sum().item()
-    #     total += targets.size(0)
-    #
-    # top1 = top1 * 100.0 / total
-    # top5 = top5 * 100.0 / total
-    #
-    # print(f"top1: {top1}  top5: {top5}")
+    else:
+        model.eval()
+        model.cuda()
 
+        train_features = []
+        train_targets = []
+        k = 20
+        retrieval_one_hot = torch.zeros(k, args.nb_classes).cuda()
+        top1, top5, total = 0.0, 0.0, 0
 
+        for b in tqdm(data_loader_train):
+            features = model(b[0].cuda()).detach()
+            features = F.normalize(features, dim=1).cpu()
+
+            train_features.append(features)
+            train_targets.append(b[1])
+
+        train_features = torch.cat(train_features, dim=0).cuda()
+        train_targets = torch.cat(train_targets, dim=0).cuda()
+
+        for b in tqdm(data_loader_val):
+            features = model(b[0].cuda()).detach()
+            features = F.normalize(features, dim=1)
+
+            targets = b[1].cuda()
+
+            batch_size = targets.shape[0]
+
+            similarity = torch.mm(features, train_features.T)
+
+            distances, indices = similarity.topk(k, largest=True, sorted=True)
+            distances = distances.cuda()
+            indices = indices.cuda()
+
+            candidates = train_targets.view(1, -1).expand(batch_size, -1)
+            retrieved_neighbors = torch.gather(candidates, 1, indices)
+
+            retrieval_one_hot.resize_(batch_size * k, args.nb_classes).zero_()
+            retrieval_one_hot.scatter_(1, retrieved_neighbors.view(-1, 1), 1.0)
+            # print("retrieval_one_hot", retrieval_one_hot)
+            distances_transform = distances.clone().div_(0.03).exp_()
+            # print("distances_transform", distances_transform)
+            probs = torch.sum(
+                torch.mul(
+                    retrieval_one_hot.view(batch_size, -1, args.nb_classes),
+                    distances_transform.view(batch_size, -1, 1),
+                ),
+                1,
+            )
+            _, predictions = probs.sort(1, True)
+
+            correct = predictions.eq(targets.data.view(-1, 1))
+            top1 = top1 + correct.narrow(1, 0, 1).sum().item()
+            top5 = top5 + correct.narrow(1, 0, 5).sum().item()
+            total += targets.size(0)
+
+        top1 = top1 * 100.0 / total
+        top5 = top5 * 100.0 / total
+
+        print(f"top1: {top1}  top5: {top5}")
 
 
 if __name__ == '__main__':
@@ -271,15 +267,18 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', '-e', type=int, default=100, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=10, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=3, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
+    parser.add_argument('--ckpt', type=str, help='checkpoint')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=1, type=int, help='loss ratio of layer2output')
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
+    parser.add_argument('--st_inter', default=False, type=utils.bool_flag,
+                        help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
     parser.add_argument('--l2o', default=False, type=utils.bool_flag, help='layer2output')
+    parser.add_argument('--knn', default=False, type=utils.bool_flag, help='knn or finetune')
 
     parser.add_argument('--data-path', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')

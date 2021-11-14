@@ -228,11 +228,9 @@ def main(args):
     args.optimizer = 'adamw'
     args.temperature = 0.2
 
-    args.st_inter = False
-
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
+    learner = PLLearner.load_from_checkpoint(args.ckpt,
                                              student=student,
-                                             teacher=teacher,
+                                             # teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
@@ -328,6 +326,7 @@ if __name__ == '__main__':
     parser.add_argument('--l2o', default=False, type=utils.bool_flag, help='layer2output')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
             distributed training; see https://pytorch.org/docs/stable/distributed.html""")
+    parser.add_argument("--ckpt", type=str)
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')

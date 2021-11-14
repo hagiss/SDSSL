@@ -15,7 +15,7 @@ import numpy as np
 import vision_transformer as vits
 
 from PIL import Image
-from pl_train_moco import PLLearner
+from pl_train_simclr import PLLearner
 
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
@@ -24,7 +24,6 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 total_acc_t1 = []
 total_acc_t5 = []
-
 
 
 def main(args):
@@ -115,9 +114,9 @@ def main(args):
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         # dataset_val,
-        Subset(dataset_train, np.arange(10000)),
+        Subset(dataset_train, np.arange(30000)),
         batch_size=args.batch_size_per_gpu,
-        shuffle=True,
+        shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
     )
@@ -149,22 +148,24 @@ def main(args):
     args.image_size = image_size
     args.total_batch = total_batch
     args.optimizer = 'adamw'
+    args.temperature = 0.2
+    args.student = True
 
     args.st_inter = False
 
-    learner_base = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    learner_base = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
                                              student=student,
-                                             teacher=teacher,
+                                             # teacher=teacher,
                                              length=len(data_loader),
                                              val_loader=val_loader,
                                              embed_dim=embed_dim,
                                              args=args)
-    aug1 = copy.deepcopy(learner_base.aug1).cuda()
-    aug2 = copy.deepcopy(learner_base.aug2).cuda()
-    for i in val_loader:
-        img1 = i[0].cuda()
-        img1 = aug1(img1)
-        break
+    aug1 = learner_base.aug1.cuda()
+    aug2 = learner_base.aug2.cuda()
+    # for i in val_loader:
+    #     img1 = i[0].cuda()
+    #     img1 = aug1(img1)
+    #     break
     model_base = copy.deepcopy(learner_base.student) if args.student else copy.deepcopy(learner_base.teacher)
 
     args.st_inter = True
@@ -176,16 +177,13 @@ def main(args):
 
     # print(model_base.get_representation(img1, intermediate=True).cpu()[0, :5])
 
-    learner_l2o = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_l2o_6.ckpt",
+    learner_l2o = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_l2o.ckpt",
                                              student=student,
-                                             teacher=teacher,
+                                             # teacher=teacher,
                                              length=len(data_loader),
                                              val_loader=val_loader,
                                              embed_dim=embed_dim,
                                              args=args)
-
-    aug3 = learner_l2o.aug1.cuda()
-    aug4 = learner_l2o.aug2.cuda()
 
     model_l2o = learner_l2o.student if args.student else learner_l2o.teacher
 
@@ -198,56 +196,38 @@ def main(args):
 
     features1 = [[] for _ in range(12)]
     features2 = [[] for _ in range(12)]
-    features3 = [[] for _ in range(12)]
-    features4 = [[] for _ in range(12)]
 
     features1_l2o = [[] for _ in range(12)]
     features2_l2o = [[] for _ in range(12)]
-    features3_l2o = [[] for _ in range(12)]
-    features4_l2o = [[] for _ in range(12)]
 
     for b in tqdm(val_loader):
         img = b[0].cuda()
         img1 = aug1(img)
         img2 = aug2(img)
-        img3 = aug3(img)
-        img4 = aug4(img)
-
         batch_size = img1.shape[0]
 
         rep1 = model_base.get_representation(img1, intermediate=True).cpu()
         rep2 = model_base.get_representation(img2, intermediate=True).cpu()
-        rep3 = model_base.get_representation(img3, intermediate=True).cpu()
-        rep4 = model_base.get_representation(img4, intermediate=True).cpu()
+        # print(rep1[0, :5])
 
         rep1_l2o = model_l2o.get_representation(img1, intermediate=True).cpu()
         rep2_l2o = model_l2o.get_representation(img2, intermediate=True).cpu()
-        rep3_l2o = model_l2o.get_representation(img3, intermediate=True).cpu()
-        rep4_l2o = model_l2o.get_representation(img4, intermediate=True).cpu()
+        # print(rep1_l2o[0, :5])
 
         # rep1 = model(img1)
         # rep2 = model(img2)
-        # rep1 = F.normalize(rep1, dim=-1, p=2).cpu()
-        # rep2 = F.normalize(rep2, dim=-1, p=2).cpu()
-        # rep3 = F.normalize(rep3, dim=-1, p=2).cpu()
-        # rep4 = F.normalize(rep4, dim=-1, p=2).cpu()
+        rep1 = F.normalize(rep1, dim=-1, p=2).cpu()
+        rep2 = F.normalize(rep2, dim=-1, p=2).cpu()
 
-        # rep1_l2o = F.normalize(rep1_l2o, dim=-1, p=2).cpu()
-        # rep2_l2o = F.normalize(rep2_l2o, dim=-1, p=2).cpu()
-        # rep3_l2o = F.normalize(rep3_l2o, dim=-1, p=2).cpu()
-        # rep4_l2o = F.normalize(rep4_l2o, dim=-1, p=2).cpu()
-
+        rep1_l2o = F.normalize(rep1_l2o, dim=-1, p=2).cpu()
+        rep2_l2o = F.normalize(rep2_l2o, dim=-1, p=2).cpu()
 
         for i in range(12):
-            features1[i].append(rep1[i * batch_size:(i + 1) * batch_size, :])
-            features2[i].append(rep2[i * batch_size:(i + 1) * batch_size, :])
-            features3[i].append(rep3[i * batch_size:(i + 1) * batch_size, :])
-            features4[i].append(rep4[i * batch_size:(i + 1) * batch_size, :])
+            features1[i].append(rep1[i*batch_size:(i+1)*batch_size, :])
+            features2[i].append(rep2[i*batch_size:(i+1)*batch_size, :])
 
             features1_l2o[i].append(rep1_l2o[i * batch_size:(i + 1) * batch_size, :])
             features2_l2o[i].append(rep2_l2o[i * batch_size:(i + 1) * batch_size, :])
-            features3_l2o[i].append(rep3_l2o[i * batch_size:(i + 1) * batch_size, :])
-            features4_l2o[i].append(rep4_l2o[i * batch_size:(i + 1) * batch_size, :])
 
     alignment = []
     # alignment_last = []
@@ -256,6 +236,9 @@ def main(args):
     alignment_l2o = []
     # alignment_last_l2o = []
     uniformity_l2o = []
+
+    ratio = []
+    ratio_l2o = []
 
     # last_features1 = torch.cat(features1[11], dim=0).cuda()
     # last_features2 = torch.cat(features2[11], dim=0).cuda()
@@ -268,116 +251,48 @@ def main(args):
 
     for _ in tqdm(range(12)):
         i = 0
-        features1[i] = torch.cat(features1[i], dim=0).cuda().unsqueeze(1)
-        features2[i] = torch.cat(features2[i], dim=0).cuda().unsqueeze(1)
-        features3[i] = torch.cat(features3[i], dim=0).cuda().unsqueeze(1)
-        features4[i] = torch.cat(features4[i], dim=0).cuda().unsqueeze(1)
+        features1[i] = torch.cat(features1[i], dim=0).cuda()
+        features2[i] = torch.cat(features2[i], dim=0).cuda()
 
-        intra_mean = torch.cat([features1[i], features2[i], features3[i], features4[i]], dim=1).mean(dim=1)
-        inter_mean = intra_mean.mean(dim=0)
-
-        features1_l2o[i] = torch.cat(features1_l2o[i], dim=0).cuda().unsqueeze(1)
-        features2_l2o[i] = torch.cat(features2_l2o[i], dim=0).cuda().unsqueeze(1)
-        features3_l2o[i] = torch.cat(features3_l2o[i], dim=0).cuda().unsqueeze(1)
-        features4_l2o[i] = torch.cat(features4_l2o[i], dim=0).cuda().unsqueeze(1)
-
-        intra_mean_l2o = torch.cat([features1_l2o[i], features2_l2o[i], features3_l2o[i], features4_l2o[i]], dim=1).mean(dim=1)
-        inter_mean_l2o = intra_mean_l2o.mean(dim=0)
-
-        features1[i] = features1[i].squeeze(1)
-        features2[i] = features2[i].squeeze(1)
-        features3[i] = features3[i].squeeze(1)
-        features4[i] = features4[i].squeeze(1)
-
-        features1_l2o[i] = features1_l2o[i].squeeze(1)
-        features2_l2o[i] = features2_l2o[i].squeeze(1)
-        features3_l2o[i] = features3_l2o[i].squeeze(1)
-        features4_l2o[i] = features4_l2o[i].squeeze(1)
+        features1_l2o[i] = torch.cat(features1_l2o[i], dim=0).cuda()
+        features2_l2o[i] = torch.cat(features2_l2o[i], dim=0).cuda()
 
         # align = torch.pow(torch.norm(features1[i] - last_features2, dim=1), 2).mean().item()
         # align += torch.pow(torch.norm(features2[i] - last_features1, dim=1), 2).mean().item()
         # align /= 2
         # alignment_last.append(align)
+        align = torch.pow(torch.norm(features1[i] - features2[i], dim=1), 2).mean().item()
+        alignment.append(align)
 
-        # alignment
-        # align = torch.pow(torch.norm(features1[i] - features2[i], dim=1), 2).mean().item()
-        # alignment.append(align)
-
-        # uniformity
-        # sq_pdist = torch.pow(torch.pdist(features1[i], p=2), 2)
+        sq_pdist = torch.pow(torch.pdist(features1[i], p=2), 2)
         # uni = -sq_pdist.mul(-2).exp().mean().log().item()
-        # uni = sq_pdist.mean().item()
-        # uniformity.append(uni)
+        uni = sq_pdist.mean().item()
+        uniformity.append(uni)
 
-        # res_n = []
-        # for ii in range(features1[i].shape[0]):
-        #     for j in range(features1[i].shape[0]):
-        #         if ii == j:
-        #             continue
-        #         res_n.append(2-2*(features1[i][ii, :] * features1[i][j, :]).sum(dim=-1))
-        # uniformity.append(torch.cat(res_n, dim=0).mean())
-
-        # intra variance
-        a = torch.pow(torch.norm(features1[i] - intra_mean, dim=1), 2).mean().item()
-        a += torch.pow(torch.norm(features2[i] - intra_mean, dim=1), 2).mean().item()
-        a += torch.pow(torch.norm(features3[i] - intra_mean, dim=1), 2).mean().item()
-        a += torch.pow(torch.norm(features4[i] - intra_mean, dim=1), 2).mean().item()
-        a /= 4
-        alignment.append(a)
-
-        # inter variance
-        u = torch.pow(torch.norm(intra_mean - inter_mean, dim=1), 2).mean().item()
-        uniformity.append(u)
+        ratio.append(uni/align)
 
         del features1[i]
         del features2[i]
-        del features3[i]
-        del features4[i]
 
         # l2o
         # align_l2o = torch.pow(torch.norm(features1_l2o[i] - last_features2_l2o, dim=1), 2).mean().item()
         # align_l2o += torch.pow(torch.norm(features2_l2o[i] - last_features1_l2o, dim=1), 2).mean().item()
         # align_l2o /= 2
         # alignment_last_l2o.append(align_l2o)
+        align_l2o = torch.pow(torch.norm(features1_l2o[i] - features2_l2o[i], dim=1), 2).mean().item()
+        alignment_l2o.append(align_l2o)
 
-        # alignment
-        # align_l2o = torch.pow(torch.norm(features1_l2o[i] - features2_l2o[i], dim=1), 2).mean().item()
-        # alignment_l2o.append(align_l2o)
-
-        # uniformity
-        # sq_pdist_l2o = torch.pow(torch.pdist(features1_l2o[i], p=2), 2)
+        sq_pdist_l2o = torch.pow(torch.pdist(features1_l2o[i], p=2), 2)
         # uni_l2o = -sq_pdist_l2o.mul(-2).exp().mean().log().item()
-        # uni_l2o = sq_pdist_l2o.mean().item()
-        # uniformity_l2o.append(uni_l2o)
+        uni_l2o = sq_pdist_l2o.mean().item()
+        uniformity_l2o.append(uni_l2o)
 
-
-        # res_n = []
-        # for ii in range(features1_l2o[i].shape[0]):
-        #     for j in range(features1_l2o[i].shape[0]):
-        #         if ii == j:
-        #             continue
-        #         res_n.append(2-2*(features1_l2o[i][ii, :] * features1_l2o[i][j, :]).sum(dim=-1))
-        # uniformity_l2o.append(torch.cat(res_n, dim=0).mean())
-
-
-        # intra variance
-        a = torch.pow(torch.norm(features1_l2o[i] - intra_mean_l2o, dim=1), 2).mean().item()
-        a += torch.pow(torch.norm(features2_l2o[i] - intra_mean_l2o, dim=1), 2).mean().item()
-        a += torch.pow(torch.norm(features3_l2o[i] - intra_mean_l2o, dim=1), 2).mean().item()
-        a += torch.pow(torch.norm(features4_l2o[i] - intra_mean_l2o, dim=1), 2).mean().item()
-        a /= 4
-        alignment_l2o.append(a)
-
-        # inter variance
-        u = torch.pow(torch.norm(intra_mean_l2o - inter_mean_l2o, dim=1), 2).mean().item()
-        uniformity_l2o.append(u)
+        ratio_l2o.append(uni_l2o / align_l2o)
 
         del features1_l2o[i]
         del features2_l2o[i]
-        del features3_l2o[i]
-        del features4_l2o[i]
 
-    r = 7
+    r = 6
     print('alignment', np.round(alignment, r))
     print('alignment_l2o', np.round(alignment_l2o, r))
 
@@ -386,6 +301,9 @@ def main(args):
 
     print('uniformity', np.round(uniformity, r))
     print('uniformity_l2o', np.round(uniformity_l2o, r))
+
+    print('ratio', np.round(ratio, r))
+    print('ratio_l2o', np.round(ratio_l2o, r))
 
 
     # for i in range(12):
@@ -422,25 +340,10 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
-
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
-    # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-    #     during which we keep the output layer fixed. Typically doing so during
-    #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
             weight decay. With ViT, a smaller value at the beginning of training works well.""")
     parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
@@ -449,20 +352,6 @@ if __name__ == '__main__':
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
-
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,

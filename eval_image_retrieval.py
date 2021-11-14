@@ -33,18 +33,17 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 
 @torch.no_grad()
-def extract_features(model, data_loader, use_cuda=True, multiscale=False):
-    metric_logger = utils.MetricLogger(delimiter="  ")
+def extract_features(model, data_loader, use_cuda=True, multiscale=False, n=1):
     features = None
-    for samples, index in metric_logger.log_every(data_loader, 10):
+    for samples, index in data_loader:
         _, _, h, w = samples.shape
 
         samples = samples.cuda(non_blocking=True)
         index = index.cuda(non_blocking=True)
         if multiscale:
-            feats = utils.multi_scale(samples, model)
+            feats = utils.multi_scale(samples, model, n=n)
         else:
-            feats = model.get_intermediate_layers_all(samples, n=1)[0].clone()
+            feats = model.get_intermediate_layers_all(samples, n=n)[0].clone()
             feats = feats[:, 0, :]
 
         # init storage feature matrix
@@ -159,9 +158,7 @@ def main(args):
     args.optimizer = 'adamw'
     args.temperature = 0.2
 
-    args.st_inter = False
-
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
+    learner = PLLearner.load_from_checkpoint(args.ckpt,
                                              student=student,
                                              # teacher=teacher,
                                              length=0,
@@ -208,8 +205,8 @@ def main(args):
 
     print(f"train: {len(dataset_train)} imgs / query: {len(dataset_query)} imgs")
 
-    train_features = extract_features(model, data_loader_train, args.use_cuda, multiscale=args.multiscale)
-    query_features = extract_features(model, data_loader_query, args.use_cuda, multiscale=args.multiscale)
+    train_features = extract_features(model, data_loader_train, args.use_cuda, multiscale=args.multiscale, n=args.n)
+    query_features = extract_features(model, data_loader_query, args.use_cuda, multiscale=args.multiscale, n=args.n)
 
     train_features = torch.nn.functional.normalize(train_features, dim=1, p=2)
     query_features = torch.nn.functional.normalize(query_features, dim=1, p=2)
@@ -313,6 +310,8 @@ if __name__ == '__main__':
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
             distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
+    parser.add_argument("--ckpt", type=str, help="ckpt")
+    parser.add_argument("--n", type=int, help="layer")
 
     hparam = parser.parse_args()
     if hparam.load_json:

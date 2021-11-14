@@ -33,14 +33,14 @@ import torch.distributed as dist
 from PIL import ImageFilter, ImageOps
 
 
-def multi_scale(samples, model):
+def multi_scale(samples, model, n=1):
     v = None
     for s in [1, 1/2**(1/2), 1/2]:  # we use 3 different scales
         if s == 1:
             inp = samples.clone()
         else:
             inp = nn.functional.interpolate(samples, scale_factor=s, mode='bilinear', align_corners=False)
-        feats = model.get_intermediate_layers_all(inp)[0][:, 0, :].clone()
+        feats = model.get_intermediate_layers_all(inp, n)[0][:, 0, :].clone()
         if v is None:
             v = feats
         else:
