@@ -566,7 +566,6 @@ def main(args):
     # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
     args.multi_node = 1
     args.optimizer = "adamw"
-    args.name = "moco_abl"
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
@@ -632,7 +631,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', '-l', default=1.5e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=100, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
-    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
+    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=1024, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=4, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
