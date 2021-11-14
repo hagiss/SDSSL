@@ -631,7 +631,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', '-l', default=1.5e-4, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=100, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
-    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=1024, help="batch size")
+    parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=512, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=4, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
@@ -652,7 +652,7 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    parser.add_argument("--warmup_epochs", default=10, type=int,
+    parser.add_argument("--warmup_epochs", default=20, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=0, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
