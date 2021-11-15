@@ -1,6 +1,6 @@
 #!/bin/sh
 ckpt="/data/byol-pytorch/checkpoints/vit_small/simclr_l2o.ckpt"
-SET=$(seq 1 12)
+SET=$(seq 6 12)
 
 for i in $SET
 do

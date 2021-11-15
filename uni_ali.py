@@ -114,7 +114,7 @@ def main(args):
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         # dataset_val,
-        Subset(dataset_train, np.arange(30000)),
+        Subset(dataset_val, np.arange(1000)),
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
@@ -202,17 +202,15 @@ def main(args):
 
     for b in tqdm(val_loader):
         img = b[0].cuda()
-        img1 = aug1(img)
+        img1 = aug2(img)
         img2 = aug2(img)
         batch_size = img1.shape[0]
 
         rep1 = model_base.get_representation(img1, intermediate=True).cpu()
         rep2 = model_base.get_representation(img2, intermediate=True).cpu()
-        # print(rep1[0, :5])
 
         rep1_l2o = model_l2o.get_representation(img1, intermediate=True).cpu()
         rep2_l2o = model_l2o.get_representation(img2, intermediate=True).cpu()
-        # print(rep1_l2o[0, :5])
 
         # rep1 = model(img1)
         # rep2 = model(img2)

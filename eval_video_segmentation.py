@@ -30,9 +30,8 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
                            and callable(torchvision_models.__dict__[name]))
 
 n_last_frames = 7
-output_dir = "/data/byol-pytorch/output/video_segmentation/moco_base_8"
 @torch.no_grad()
-def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette):
+def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette, output_dir):
     """
     Evaluate tracking on a video given first frame & segmentation
     """
@@ -278,11 +277,11 @@ def main(args):
     args.image_size = 224
     args.total_batch = total_batch
     args.optimizer = 'adamw'
-    args.st_inter = False
+    # args.st_inter = False
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/moco_base.ckpt",
+    learner = PLLearner.load_from_checkpoint(args.ckpt,
                                              student=student,
-                                             teacher=teacher,
+                                             # teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
@@ -314,7 +313,7 @@ def main(args):
         frame_list = read_frame_list(video_dir)
         seg_path = frame_list[0].replace("JPEGImages", "Annotations").replace("jpg", "png")
         first_seg, seg_ori = read_seg(seg_path, 32)
-        eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette)
+        eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette, args.output_dir)
 
 
 if __name__ == '__main__':
@@ -336,6 +335,8 @@ if __name__ == '__main__':
     parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
     parser.add_argument('--l2o', default=False, type=utils.bool_flag, help='layer2output')
+    parser.add_argument('--output_dir', type=str, help="output_dir")
+    parser.add_argument('--ckpt', type=str, help="checkpoint")
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
