@@ -17,7 +17,7 @@ import numpy as np
 import vision_transformer as vits
 
 from PIL import Image
-from pl_train_simclr import PLLearner
+from pl_train_moco import PLLearner
 
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
@@ -230,12 +230,12 @@ def main(args):
 
     learner = PLLearner.load_from_checkpoint(args.ckpt,
                                              student=student,
-                                             # teacher=teacher,
+                                             teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.student
+    model = learner.teacher
 
     model = model.net
 
@@ -350,7 +350,7 @@ if __name__ == '__main__':
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
 
-    parser.add_argument('--data_path', default='/data/dataset/copy_detection/', type=str,
+    parser.add_argument('--data_path', default='/dataset/copy_detection/', type=str,
                         help="See https://lear.inrialpes.fr/~jegou/data.php#copydays")
     parser.add_argument('--whitening_path', default='/data/dataset/data_yfcc/whitening/', type=str,
                         help="""Path to directory with images used for computing the whitening operator.

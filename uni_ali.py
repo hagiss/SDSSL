@@ -15,7 +15,7 @@ import numpy as np
 import vision_transformer as vits
 
 from PIL import Image
-from pl_train_simclr import PLLearner
+from pl_train_moco import PLLearner
 
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
@@ -62,8 +62,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        # path = 'dataset'
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = 'dataset'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -149,13 +149,13 @@ def main(args):
     args.total_batch = total_batch
     args.optimizer = 'adamw'
     args.temperature = 0.2
-    args.student = True
+    # args.student = True
 
     args.st_inter = False
 
-    learner_base = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_base.ckpt",
+    learner_base = PLLearner.load_from_checkpoint(args.ckpt_base,
                                              student=student,
-                                             # teacher=teacher,
+                                             teacher=teacher,
                                              length=len(data_loader),
                                              val_loader=val_loader,
                                              embed_dim=embed_dim,
@@ -166,7 +166,7 @@ def main(args):
     #     img1 = i[0].cuda()
     #     img1 = aug1(img1)
     #     break
-    model_base = copy.deepcopy(learner_base.student) if args.student else copy.deepcopy(learner_base.teacher)
+    model_base = copy.deepcopy(learner_base.teacher)
 
     args.st_inter = True
     for p in model_base.parameters():
@@ -177,7 +177,7 @@ def main(args):
 
     # print(model_base.get_representation(img1, intermediate=True).cpu()[0, :5])
 
-    learner_l2o = PLLearner.load_from_checkpoint("/data/byol-pytorch/checkpoints/vit_small/simclr_l2o.ckpt",
+    learner_l2o = PLLearner.load_from_checkpoint(args.ckpt_l2o,
                                              student=student,
                                              # teacher=teacher,
                                              length=len(data_loader),
@@ -214,11 +214,12 @@ def main(args):
 
         # rep1 = model(img1)
         # rep2 = model(img2)
-        rep1 = F.normalize(rep1, dim=-1, p=2).cpu()
-        rep2 = F.normalize(rep2, dim=-1, p=2).cpu()
+        if args.normalize:
+            rep1 = F.normalize(rep1, dim=-1, p=2).cpu()
+            rep2 = F.normalize(rep2, dim=-1, p=2).cpu()
 
-        rep1_l2o = F.normalize(rep1_l2o, dim=-1, p=2).cpu()
-        rep2_l2o = F.normalize(rep2_l2o, dim=-1, p=2).cpu()
+            rep1_l2o = F.normalize(rep1_l2o, dim=-1, p=2).cpu()
+            rep2_l2o = F.normalize(rep2_l2o, dim=-1, p=2).cpu()
 
         for i in range(12):
             features1[i].append(rep1[i*batch_size:(i+1)*batch_size, :])
@@ -328,6 +329,9 @@ if __name__ == '__main__':
     parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
     parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
     parser.add_argument('--l2o', default=False, type=utils.bool_flag, help='layer2output')
+    parser.add_argument('--ckpt_base', type=str, help='checkpoint_base')
+    parser.add_argument('--ckpt_l2o', type=str, help='checkpoint_l2o')
+    parser.add_argument('--normalize', type=utils.bool_flag, help="normalize")
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')

@@ -31,7 +31,7 @@ torchvision_archs = sorted(name for name in torchvision_models.__dict__
 
 n_last_frames = 7
 @torch.no_grad()
-def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette, output_dir):
+def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette, output_dir, n=1):
     """
     Evaluate tracking on a video given first frame & segmentation
     """
@@ -44,7 +44,7 @@ def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, 
     # first frame
     frame1, ori_h, ori_w = read_frame(frame_list[0])
     # extract first frame feature
-    frame1_feat = extract_feature(model, frame1).T  # dim x h*w
+    frame1_feat = extract_feature(model, frame1, n=n).T  # dim x h*w
 
     # saving first segmentation
     out_path = os.path.join(video_folder, "00000.png")
@@ -58,7 +58,7 @@ def eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, 
         used_segs = [first_seg] + [pair[1] for pair in list(que.queue)]
 
         frame_tar_avg, feat_tar, mask_neighborhood = label_propagation(model, frame_tar, used_frame_feats,
-                                                                       used_segs, mask_neighborhood)
+                                                                       used_segs, n, mask_neighborhood)
 
         # pop out oldest frame if neccessary
         if que.qsize() == n_last_frames:
@@ -111,12 +111,12 @@ def norm_mask(mask):
     return mask
 
 
-def label_propagation(model, frame_tar, list_frame_feats, list_segs, mask_neighborhood=None):
+def label_propagation(model, frame_tar, list_frame_feats, list_segs, n, mask_neighborhood=None):
     """
     propagate segs of frames in list_frames to frame_tar
     """
     ## we only need to extract feature of the target frame
-    feat_tar, h, w = extract_feature(model, frame_tar, return_h_w=True)
+    feat_tar, h, w = extract_feature(model, frame_tar, n=n, return_h_w=True)
 
     return_feat_tar = feat_tar.T  # dim x h*w
 
@@ -151,9 +151,9 @@ def label_propagation(model, frame_tar, list_frame_feats, list_segs, mask_neighb
     return seg_tar, return_feat_tar, mask_neighborhood
 
 
-def extract_feature(model, frame, return_h_w=False):
+def extract_feature(model, frame, n=1, return_h_w=False):
     """Extract one frame feature everytime."""
-    out = model.get_intermediate_layers_all(frame.unsqueeze(0).cuda(), n=8)[0].clone()
+    out = model.get_intermediate_layers_all(frame.unsqueeze(0).cuda(), n=n)[0].clone()
     out = out[:, 1:, :]  # we discard the [CLS] token
     h, w = int(frame.shape[1] / model.patch_embed.patch_size[0]), int(frame.shape[2] / model.patch_embed.patch_size[1])
     dim = out.shape[-1]
@@ -277,16 +277,17 @@ def main(args):
     args.image_size = 224
     args.total_batch = total_batch
     args.optimizer = 'adamw'
+    args.temperature = 0.2
     # args.st_inter = False
 
     learner = PLLearner.load_from_checkpoint(args.ckpt,
                                              student=student,
-                                             # teacher=teacher,
+                                             teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.student if args.student else learner.teacher
+    model = learner.teacher
 
     model = model.net
 
@@ -303,7 +304,7 @@ def main(args):
         color_palette.append([int(i) for i in line.decode("utf-8").split('\n')[0].split(" ")])
     color_palette = np.asarray(color_palette, dtype=np.uint8).reshape(-1, 3)
 
-    data_path = "/data/dataset/davis-2017/DAVIS/"
+    data_path = "/dataset/davis-2017/DAVIS/"
 
     video_list = open(os.path.join(data_path, "ImageSets/2017/val.txt")).readlines()
     for i, video_name in enumerate(video_list):
@@ -313,7 +314,7 @@ def main(args):
         frame_list = read_frame_list(video_dir)
         seg_path = frame_list[0].replace("JPEGImages", "Annotations").replace("jpg", "png")
         first_seg, seg_ori = read_seg(seg_path, 32)
-        eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette, args.output_dir)
+        eval_video_tracking_davis(model, frame_list, video_dir, first_seg, seg_ori, color_palette, args.output_dir, args.n)
 
 
 if __name__ == '__main__':
@@ -337,6 +338,7 @@ if __name__ == '__main__':
     parser.add_argument('--l2o', default=False, type=utils.bool_flag, help='layer2output')
     parser.add_argument('--output_dir', type=str, help="output_dir")
     parser.add_argument('--ckpt', type=str, help="checkpoint")
+    parser.add_argument('--n', type=int, help='layer')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')

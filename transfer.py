@@ -29,7 +29,7 @@ import vision_transformer as vits
 from PIL import Image
 from pl_train_moco import PLLearner as MOCO
 # import pl_train.PLLearner as BYOL
-from pl_train_simclr import PLLearner as SimCLR
+# from pl_train_simclr import PLLearner as SimCLR
 
 from datasets import build_dataset
 import pytorch_lightning as pl
@@ -143,14 +143,14 @@ def main(args):
     args.weight_decay_end = 0.1
     args.temperature = 0.2
 
-    learner = SimCLR.load_from_checkpoint(args.ckpt,
+    learner = MOCO.load_from_checkpoint(args.ckpt,
                                           student=student,
-                                          # teacher=teacher,
+                                          teacher=teacher,
                                           length=0,
                                           val_loader=None,
                                           embed_dim=embed_dim,
                                           args=args)
-    model = learner.student
+    model = learner.teacher
     model = model.net
 
     model.train()

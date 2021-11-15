@@ -24,7 +24,7 @@ import numpy as np
 import vision_transformer as vits
 
 from PIL import Image
-from pl_train_simclr import PLLearner
+from pl_train_moco import PLLearner
 
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
@@ -160,12 +160,12 @@ def main(args):
 
     learner = PLLearner.load_from_checkpoint(args.ckpt,
                                              student=student,
-                                             # teacher=teacher,
+                                             teacher=teacher,
                                              length=0,
                                              val_loader=None,
                                              embed_dim=embed_dim,
                                              args=args)
-    model = learner.student.net
+    model = learner.teacher.net
 
     # model = model.net
 
@@ -302,7 +302,7 @@ if __name__ == '__main__':
                         help="Whether to use batch normalizations in projection head (Default: False)")
     parser.add_argument('--student', default=False, type=utils.bool_flag, help='choose student or teacher network')
 
-    parser.add_argument('--data_path', default='/data/dataset/revisitop/data/datasets/', type=str)
+    parser.add_argument('--data_path', default='/dataset/revisitop/data/datasets/', type=str)
     parser.add_argument('--dataset', default='rparis6k', type=str, choices=['roxford5k', 'rparis6k'])
     parser.add_argument('--multiscale', default=True, type=utils.bool_flag)
     parser.add_argument('--imsize', default=512, type=int, help='Image size')
