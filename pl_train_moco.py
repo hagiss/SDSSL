@@ -72,6 +72,7 @@ class PLLearner(pl.LightningModule):
         super().__init__()
         # self.save_hyperparameters()
         self.ratio = 0
+        self.pred_ratio = args.pred_ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
 
@@ -100,6 +101,10 @@ class PLLearner(pl.LightningModule):
             # self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
+
+        self.fp16_scaler = None
+        if args.fp16:
+            self.fp16_scaler = torch.cuda.amp.GradScaler()
 
         length = math.ceil(length / (args.accumulate * torch.cuda.device_count()))
 
@@ -224,10 +229,6 @@ class PLLearner(pl.LightningModule):
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         # projections
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
-        # student_output1, student_detached1, student_proj1 = student_output1
-        # student_output2, student_detached2, student_proj2 = student_output2
-        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
         loss_mid, loss_detached = 0, 0
         if self.t_inter:
@@ -244,11 +245,6 @@ class PLLearner(pl.LightningModule):
 
             loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
 
-            # opt = self.optimizer_pred
-            # opt.zero_grad()
-            # self.manual_backward(12 * loss_detached)
-            # opt.step()
-
             """compute loss for vit and projector (update predictor slightly)"""
             student_output1 = self.student.predict(student_output1)
             student_output2 = self.student.predict(student_output2)
@@ -261,21 +257,19 @@ class PLLearner(pl.LightningModule):
             student_output1 = self.student.predict(student_output1)
             student_output2 = self.student.predict(student_output2)
 
-        # if self.t_inter:
-        #     _, student_proj1 = torch.split(student_proj1, [batch_size, 11 * batch_size], dim=0)
-        #     _, student_proj2 = torch.split(student_proj2, [batch_size, 11 * batch_size], dim=0)
-        #     loss_mid += cos_fn(student_proj1, teacher_mid1) + cos_fn(student_proj2, teacher_mid2)
-
-
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
-        # ratio = self.ratio if self.ratio > 0 else 11
-        loss = loss_output + self.ratio * loss_mid + 12 * loss_detached
+        loss = loss_output + self.ratio * loss_mid + self.pred_ratio * 12 * loss_detached
 
         opt = self.optimizer
         opt.zero_grad()
+        # if self.fp16_scaler is None:
         self.manual_backward(loss)
         opt.step()
+        # else:
+        #     self.fp16_scaler.scale(loss).backward()
+        #     self.fp16_scaler.step(opt)
+        #     self.fp16_scaler.update()
         # loss = self.info_nce_loss(student_output1, teacher_output1)
         # loss += self.info_nce_loss(student_output2, teacher_output2)
 
@@ -458,7 +452,7 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
+        path = '/workspace'
         # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
@@ -472,10 +466,10 @@ def main(args):
             path + '/val',
             val_transform
         )
-        fine_dataset = datasets.ImageFolder(
-            path + '/train',
-            fine_transform
-        )
+        # fine_dataset = datasets.ImageFolder(
+        #     path + '/train',
+        #     fine_transform
+        # )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
@@ -488,15 +482,15 @@ def main(args):
         drop_last=True,
         pin_memory=True,
     )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
-        batch_size=args.batch_size_per_gpu,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
-    )
+    # fine_loader = DataLoader(
+    #     fine_dataset,
+    #     # Subset(fine_dataset, np.arange(64)),
+    #     batch_size=args.batch_size_per_gpu,
+    #     shuffle=True,
+    #     num_workers=args.num_workers,
+    #     drop_last=True,
+    #     pin_memory=True,
+    # )
     # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
@@ -604,9 +598,10 @@ if __name__ == '__main__':
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
+    parser.add_argument('--pred_ratio', default=1, type=float, help='loss ratio of pred loss')
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
-    parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
+    parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
+    parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
@@ -644,6 +639,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
+    parser.add_argument('--fp16', type=utils.bool_flag, default=True, help="fp16 for training")
 
     # # Temperature teacher parameters
     # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
@@ -678,7 +674,7 @@ if __name__ == '__main__':
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
     parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
-    parser.add_argument('--dis_token', default=False, type=bool, help="distillation token")
+    parser.add_argument('--dis_token', default=False, type=utils.bool_flag, help="distillation token")
 
     hparam = parser.parse_args()
     if hparam.load_json:

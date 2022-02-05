@@ -84,7 +84,7 @@ class NetWrapper(nn.Module):
                 if i == 11:
                     mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
                 else:
-                    mlp = MLP(3, embed_size, args.out_dim, int(args.mlp_hidden/2), last_bn)
+                    mlp = MLP(3, embed_size, args.out_dim, int(args.mlp_hidden/2), True)
 
                 self.projector.append(mlp)
 
@@ -92,7 +92,7 @@ class NetWrapper(nn.Module):
                     if i == 11:
                         mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     else:
-                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
+                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, True)
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):
