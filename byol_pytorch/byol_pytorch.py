@@ -61,6 +61,7 @@ class NetWrapper(nn.Module):
         self.intermediate = intermediate
         self.predictor = None
         self.projection_hidden_size = args.mlp_hidden
+        self.mlp_layers = 12
 
         # if prediction:
         #     self.predictor = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
@@ -80,19 +81,19 @@ class NetWrapper(nn.Module):
             if prediction:
                 self.predictor = nn.ModuleList([])
 
-            for i in range(12):
-                if i == 11:
+            for i in range(self.mlp_layers):
+                if i == self.mlp_layers-1:
                     mlp = MLP(3, embed_size, args.out_dim, args.mlp_hidden, last_bn)
                 else:
-                    mlp = MLP(3, embed_size, args.out_dim, int(args.mlp_hidden/2), True)
+                    mlp = MLP(3, embed_size, args.out_dim, int(args.mlp_hidden/2), last_bn)
 
                 self.projector.append(mlp)
 
                 if prediction:
-                    if i == 11:
+                    if i == self.mlp_layers-1:
                         mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     else:
-                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, True)
+                        mlp2 = MLP(2, args.out_dim, args.out_dim, args.mlp_hidden, last_bn)
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):
@@ -113,10 +114,51 @@ class NetWrapper(nn.Module):
 
         if self.intermediate:
             ret = []
-            representation = rearrange(representation, "(d b) e -> d b e", d=12)
+            representation = rearrange(representation, "(d b) e -> d b e", d=self.mlp_layers)
             for i, project in enumerate(self.projector):
                 ret.append(project(representation[i, :]))
 
+            # s0 = torch.cuda.Stream()
+            # s1 = torch.cuda.Stream()
+            # s2 = torch.cuda.Stream()
+            # s3 = torch.cuda.Stream()
+            # s4 = torch.cuda.Stream()
+            # s5 = torch.cuda.Stream()
+            # s6 = torch.cuda.Stream()
+            # s7 = torch.cuda.Stream()
+            # s8 = torch.cuda.Stream()
+            # s9 = torch.cuda.Stream()
+            # s10 = torch.cuda.Stream()
+            # s11 = torch.cuda.Stream()
+            #
+            # with torch.cuda.stream(s0):
+            #     rep0 = self.projector[0](representation[0, :])
+            # with torch.cuda.stream(s1):
+            #     rep1 = self.projector[1](representation[1, :])
+            # with torch.cuda.stream(s2):
+            #     rep2 = self.projector[2](representation[2, :])
+            # with torch.cuda.stream(s3):
+            #     rep3 = self.projector[3](representation[3, :])
+            # with torch.cuda.stream(s4):
+            #     rep4 = self.projector[4](representation[4, :])
+            # with torch.cuda.stream(s5):
+            #     rep5 = self.projector[5](representation[5, :])
+            # with torch.cuda.stream(s6):
+            #     rep6 = self.projector[6](representation[6, :])
+            # with torch.cuda.stream(s7):
+            #     rep7 = self.projector[7](representation[7, :])
+            # with torch.cuda.stream(s8):
+            #     rep8 = self.projector[8](representation[8, :])
+            # with torch.cuda.stream(s9):
+            #     rep9 = self.projector[9](representation[9, :])
+            # with torch.cuda.stream(s10):
+            #     rep10 = self.projector[10](representation[10, :])
+            # with torch.cuda.stream(s11):
+            #     rep11 = self.projector[11](representation[11, :])
+
+            # torch.cuda.synchronize()
+
+            # ret = torch.cat([rep0, rep1, rep2, rep3, rep4, rep5, rep6, rep7, rep8, rep9, rep10, rep11])
             if self.up > 0:
                 last = ret[-1].unsqueeze(0)
                 last = repeat(last, "() b e -> (d b) e", d=self.up)
@@ -143,6 +185,46 @@ class NetWrapper(nn.Module):
                     break
                 prediction = predictor(projections[i, :])
                 ret.append(prediction)
+
+            # s0 = torch.cuda.Stream()
+            # s1 = torch.cuda.Stream()
+            # s2 = torch.cuda.Stream()
+            # s3 = torch.cuda.Stream()
+            # s4 = torch.cuda.Stream()
+            # s5 = torch.cuda.Stream()
+            # s6 = torch.cuda.Stream()
+            # s7 = torch.cuda.Stream()
+            # s8 = torch.cuda.Stream()
+            # s9 = torch.cuda.Stream()
+            # s10 = torch.cuda.Stream()
+            # s11 = torch.cuda.Stream()
+            #
+            # with torch.cuda.stream(s0):
+            #     rep0 = self.predictor[0](projections[0, :])
+            # with torch.cuda.stream(s1):
+            #     rep1 = self.predictor[1](projections[1, :])
+            # with torch.cuda.stream(s2):
+            #     rep2 = self.predictor[2](projections[2, :])
+            # with torch.cuda.stream(s3):
+            #     rep3 = self.predictor[3](projections[3, :])
+            # with torch.cuda.stream(s4):
+            #     rep4 = self.predictor[4](projections[4, :])
+            # with torch.cuda.stream(s5):
+            #     rep5 = self.predictor[5](projections[5, :])
+            # with torch.cuda.stream(s6):
+            #     rep6 = self.predictor[6](projections[6, :])
+            # with torch.cuda.stream(s7):
+            #     rep7 = self.predictor[7](projections[7, :])
+            # with torch.cuda.stream(s8):
+            #     rep8 = self.predictor[8](projections[8, :])
+            # with torch.cuda.stream(s9):
+            #     rep9 = self.predictor[9](projections[9, :])
+            # with torch.cuda.stream(s10):
+            #     rep10 = self.predictor[10](projections[10, :])
+            # with torch.cuda.stream(s11):
+            #     rep11 = self.predictor[11](projections[11, :])
+            #
+            # ret = torch.cat([rep0, rep1, rep2, rep3, rep4, rep5, rep6, rep7, rep8, rep9, rep10, rep11])
 
             return torch.cat(ret)
         elif self.intermediate:

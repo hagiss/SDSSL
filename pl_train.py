@@ -486,6 +486,7 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
+        # resume_from_checkpoint="/workspace/byol-pytorch/log/byol/vit_small_16_l2o_300e/1.4999999999999998_0_1024_0_0.1_0.1/version_0/checkpoints/epoch=119-step=150119.ckpt",
         gpus=torch.cuda.device_count(),
         max_epochs=args.max_epochs,
         default_root_dir="output/vit.model",

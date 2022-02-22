@@ -15,6 +15,7 @@ from torchmetrics import Accuracy
 from torchvision import models as torchvision_models
 import vision_transformer as vits
 import utils
+from einops import rearrange, repeat
 
 
 def default(val, def_val):
@@ -59,13 +60,13 @@ class Tuner(pl.LightningModule):
         # dim_mlp = self.model.fc[0].in_features
         # self.model.fc = nn.Identity()
         # self.model.train()
-        self.fc = nn.Linear(embed_dim, 1000)
+        self.fcs = nn.ModuleList([nn.Linear(embed_dim, 1000) for i in range(12)])
 
         self.train_acc = Accuracy()
         self.valid_acc = Accuracy()
 
         self.optim = torch.optim.SGD(
-            self.fc.parameters(),
+            self.fcs.parameters(),
             lr * total_batch_size / 256.,  # linear scaling rule
             momentum=0.9,
             weight_decay=0,  # we do not apply weight decay
@@ -99,11 +100,21 @@ class Tuner(pl.LightningModule):
 
         # x = self.model.layer_repr().detach()
         # x = rearrange(x, 'd b c -> b (d c)')
-        x = self.model.get_representation(x)
-        logits = self.fc(x)
-        loss = self.criterion(logits.view(-1, 1000), labels.view(-1))
+        with torch.no_grad():
+            x = self.model.get_intermediate_layers(x, n=12)
+            x = rearrange(x, "(d b) e -> d b e", d=12)
 
-        return loss, logits
+        logits = []
+        losses = 0
+        for i, fc in enumerate(self.fcs):
+            logit = fc(x[i, :])
+            loss = self.criterion(logit.view(-1, 1000), labels.view(-1))
+            losses += loss
+            logits.append(logit)
+
+        # logits = torch.cat(logits, dim=0)
+
+        return losses, logits
 
     def flat_accuracy(self, preds, labels):
         pred_flat = np.argmax(preds, axis=1).flatten()
@@ -133,12 +144,15 @@ class Tuner(pl.LightningModule):
 
         loss, logits = self.forward(x, label)
 
-        accuracy = self.flat_accuracy(logits.detach().cpu().numpy(), label.cpu().numpy())
+        accuracies = []
+        for l in logits:
+            accuracy = self.flat_accuracy(l.detach().cpu().numpy(), label.cpu().numpy())
+            accuracies.append(accuracy)
 
         # self.log('fine_val_loss', loss.detach().item(), prog_bar=True)
         # self.log('fine_val_acc', prog_bar=True)
 
-        return {'acc': accuracy}
+        return {'acc': accuracies}
 
     @torch.no_grad()
     def validation_step_end(self, batch_parts):
@@ -152,11 +166,13 @@ class Tuner(pl.LightningModule):
         accuracy = torch.tensor([f for f in outs], device=self.device)
         gather_t = [torch.ones_like(accuracy) for _ in range(dist.get_world_size())]
         dist.all_gather(gather_t, accuracy)
-        accuracy = torch.cat(gather_t).to(self.device).mean()
-        self.best = max(accuracy.item(), self.best)
+        accuracy = torch.cat(gather_t).to(self.device).mean(dim=0)
+        # self.best = max(accuracy.item(), self.best)
 
         if utils.get_rank() == 0:
-            print(f"Epoch: {self.current_epoch}  acc: {accuracy.item()}  best: {self.best}")
+            print(f"Epoch: {self.current_epoch}, Acc: {accuracy}")
+            # for i, acc in accuracy:
+            #     print(f"acc{i}: {acc.item()}")
 
 
 if __name__ == '__main__':

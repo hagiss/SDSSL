@@ -589,16 +589,18 @@ class MultiCropWrapper(nn.Module):
         start_idx = 0
         for end_idx in idx_crops:
             if self.student:
-                _out = self.backbone.get_intermediate_layers(torch.cat(x[start_idx: end_idx]), n=12, dino=True)
+                _out = self.backbone.get_intermediate_layers(torch.cat(x[start_idx: end_idx]), n=12)
             else:
-                _out = self.backbone(torch.cat(x[start_idx: end_idx]), dino=True)
+                _out = self.backbone(torch.cat(x[start_idx: end_idx]))
             if start_idx == 0:
                 output = _out
             else:
-                output = torch.cat((output, _out))
+                # print(output.shape)
+                # print(_out.shape)
+                output = torch.cat((output, _out), dim=0)
             start_idx = end_idx
-        if self.student:
-            return self.head(output), self.head(output.detach())
+        # if self.student:
+        #     return self.head(output), self.head(output.detach())
         # Run the head forward on the concatenated features.
         return self.head(output)
 

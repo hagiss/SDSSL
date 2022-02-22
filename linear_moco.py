@@ -458,7 +458,7 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
+        path = '/workspace'
         # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
@@ -545,7 +545,7 @@ def main(args):
     args.total_batch = total_batch
     args.optimizer = 'adamw'
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
+    learner = PLLearner.load_from_checkpoint("/multi-modal/sdssl/moco/base_12heads/checkpoints/epoch=299-step=375299.ckpt",
                                              student=student,
                                              teacher=teacher,
                                              length=len(data_loader),
@@ -556,7 +556,9 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    model = learner.student if args.student else learner.teacher
+    # model = learner.student if args.student else learner.teacher
+    model = learner.student
+    model = model.net
     model.eval()
     tuner = fine_tune.Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
     fine_trainer = pl.Trainer(
@@ -565,7 +567,7 @@ def main(args):
         default_root_dir="output/vit.model",
         accelerator=args.accelerator,
         logger=logger,
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=2,
         # accumulate_grad_batches=1,
         check_val_every_n_epoch=10,
         sync_batchnorm=True,

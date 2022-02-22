@@ -14,8 +14,8 @@ from torchvision import models as torchvision_models
 
 import utils
 from main_dino import DataAugmentationDINO, DINOLoss
-import vision_transformer as vits
-from vision_transformer import DINOHead, StudentDINOHead
+import vision_transformer_dino as vits
+from vision_transformer_dino import DINOHead, StudentDINOHead
 import json
 import math
 import fine_tune
@@ -47,6 +47,7 @@ class PLLearner(pl.LightningModule):
 
         self.freeze_last_layer = args.freeze_last_layer
         self.l2o = args.l2o
+        self.clip_grad = args.clip_grad
 
         teacher.load_state_dict(student.state_dict())
 
@@ -56,7 +57,7 @@ class PLLearner(pl.LightningModule):
                 args.out_dim,
                 use_bn=False,
                 norm_last_layer=args.norm_last_layer,
-                nlayers=2,
+                # nlayers=2,
             ), True)
         else:
             self.student = utils.MultiCropWrapper(student, DINOHead(
@@ -116,6 +117,10 @@ class PLLearner(pl.LightningModule):
             args.weight_decay_end,
             args.epochs, length,
         )
+        self.ratio_schedule = utils.cosine_scheduler(
+            0, args.ratio,
+            args.epochs, length,
+        )
         # momentum parameter is increased to 1. during training with a cosine schedule
         self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
                                                         args.epochs, length)
@@ -127,6 +132,8 @@ class PLLearner(pl.LightningModule):
         if args.use_fp16:
             self.fp16_scaler = torch.cuda.amp.GradScaler()
 
+        self.automatic_optimization = False
+
     def configure_optimizers(self):
         return [self.optimizer]
 
@@ -136,26 +143,42 @@ class PLLearner(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         images = batch[0]
 
+        self.update_lr()
+
         with torch.cuda.amp.autocast(self.fp16_scaler is not None):
             teacher_output, student_output = self.forward(images)
-            student_detached = None
-            if self.l2o:
-                student_output, student_detached = student_output
-            loss = self.loss(student_output, teacher_output, self.current_epoch, student_detached)
+            # student_detached = None
+            # if self.l2o:
+            #     student_output, student_detached = student_output
+            loss_out, loss_low = self.loss(student_output, teacher_output, self.current_epoch)
+
+            loss = loss_out + self.ratio * loss_low
+
+            opt = self.optimizer
+            opt.zero_grad()
+            self.manual_backward(loss)
+
+            if self.clip_grad > 0 :
+                param_norms = utils.clip_gradients(self.student, args.clip_grad)
+            utils.cancel_gradients_last_layer(self.current_epoch, self.student, self.freeze_last_layer)
+
+            opt.step()
+
             self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
+
+            self.momentum_update()
 
         return {'loss': loss}
 
-    def on_after_backward(self):
+    def update_lr(self):
+        self.ratio = self.ratio_schedule[self.global_step]
         for i, param_group in enumerate(self.optimizer.param_groups):
             param_group["lr"] = self.lr_schedule[self.global_step]
             if i == 0:
+                self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-        utils.cancel_gradients_last_layer(self.current_epoch, self.student,
-                                          self.freeze_last_layer)
-
-    def on_before_zero_grad(self, _):
+    def momentum_update(self):
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.backbone.parameters(), self.teacher.backbone.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
@@ -176,6 +199,15 @@ class PLLearner(pl.LightningModule):
                 old_weight, up_weight = ma_params.data, current_params.data
                 ma_params.data = old_weight * m + (1 - m) * up_weight
 
+    # def on_after_backward(self):
+    #     for i, param_group in enumerate(self.optimizer.param_groups):
+    #         param_group["lr"] = self.lr_schedule[self.global_step]
+    #         if i == 0:
+    #             param_group["weight_decay"] = self.wd_schedule[self.global_step]
+    #
+    #     utils.cancel_gradients_last_layer(self.current_epoch, self.student,
+    #                                       self.freeze_last_layer)
+    #
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
@@ -289,7 +321,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', '-l', default=1e-5, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epoch")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=10, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboardx path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
 
@@ -327,6 +359,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
+    parser.add_argument('--ratio', type=float, default=1.0, help="self-distillation ratio")
 
     # Temperature teacher parameters
     parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
@@ -401,8 +434,8 @@ if __name__ == '__main__':
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
         fine_dataset = datasets.STL10(args.data, split='train', download=True, transform=fine_transform)
     elif args.dataset == "imagenet":
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
-        # path = '/dataset'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = '/workspace'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -485,7 +518,7 @@ if __name__ == '__main__':
         accumulate_grad_batches=args.accumulate,
         check_val_every_n_epoch=args.val_interval,
         callbacks=[lr_monitor],
-        # progress_bar_refresh_rate=0
+        progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
@@ -496,20 +529,20 @@ if __name__ == '__main__':
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
-
-    tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
-    fine_trainer = pl.Trainer(
-        gpus=torch.cuda.device_count(),
-        max_epochs=100,
-        default_root_dir="output/vit.model",
-        accelerator="ddp",
-        # logger=logger,
-        num_sanity_val_steps=0,
-        # accumulate_grad_batches=args.accumulate,
-        check_val_every_n_epoch=10,
-        sync_batchnorm=True,
-        callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
-    )
-    fine_trainer.fit(tuner, fine_loader, val_loader)
+    # total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
+    #
+    # tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, 0.02)
+    # fine_trainer = pl.Trainer(
+    #     gpus=torch.cuda.device_count(),
+    #     max_epochs=100,
+    #     default_root_dir="output/vit.model",
+    #     accelerator="ddp",
+    #     # logger=logger,
+    #     num_sanity_val_steps=0,
+    #     # accumulate_grad_batches=args.accumulate,
+    #     check_val_every_n_epoch=10,
+    #     sync_batchnorm=True,
+    #     callbacks=[lr_monitor],
+    #     progress_bar_refresh_rate=0
+    # )
+    # fine_trainer.fit(tuner, fine_loader, val_loader)

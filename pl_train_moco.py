@@ -75,6 +75,7 @@ class PLLearner(pl.LightningModule):
         self.pred_ratio = args.pred_ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
+        self.mlp_layers = 12
 
         teacher.load_state_dict(student.state_dict())
 
@@ -129,7 +130,7 @@ class PLLearner(pl.LightningModule):
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
-        self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
+        self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, args.momentum_teacher_end,
                                                         args.epochs, length)
         print(f"Loss, optimizer and schedulers ready.")
 
@@ -232,26 +233,26 @@ class PLLearner(pl.LightningModule):
 
         loss_mid, loss_detached = 0, 0
         if self.t_inter:
-            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * (self.mlp_layers-1), batch_size], dim=0)
+            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * (self.mlp_layers-1), batch_size], dim=0)
 
         teacher_output1 = concat_all_gather(teacher_output1)
         teacher_output2 = concat_all_gather(teacher_output2)
 
         if self.st_inter:
             """manual update for predictor"""
-            student_detached1 = self.student.predict(student_output1.detach())
-            student_detached2 = self.student.predict(student_output2.detach())
+            student_detached1 = self.student.predict(student_output1.detach(), self.mlp_layers)
+            student_detached2 = self.student.predict(student_output2.detach(), self.mlp_layers)
 
-            loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
+            loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, self.mlp_layers) + self.info_nce_loss_layer(student_detached2, teacher_output2, self.mlp_layers)
 
             """compute loss for vit and projector (update predictor slightly)"""
-            student_output1 = self.student.predict(student_output1)
-            student_output2 = self.student.predict(student_output2)
+            student_output1 = self.student.predict(student_output1, self.mlp_layers)
+            student_output2 = self.student.predict(student_output2, self.mlp_layers)
 
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_layer(student_mid1, teacher_output1) + self.info_nce_loss_layer(student_mid2, teacher_output2)
+            student_mid1, student_output1 = torch.split(student_output1, [batch_size * (self.mlp_layers-1), batch_size], dim=0)
+            student_mid2, student_output2 = torch.split(student_output2, [batch_size * (self.mlp_layers-1), batch_size], dim=0)
+            loss_mid = self.info_nce_loss_layer(student_mid1, teacher_output1, self.mlp_layers-1) + self.info_nce_loss_layer(student_mid2, teacher_output2, self.mlp_layers-1)
 
         else:
             student_output1 = self.student.predict(student_output1)
@@ -259,7 +260,7 @@ class PLLearner(pl.LightningModule):
 
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
-        loss = loss_output + self.ratio * loss_mid + self.pred_ratio * 12 * loss_detached
+        loss = loss_output + self.ratio * loss_mid + self.pred_ratio * self.mlp_layers * loss_detached
 
         opt = self.optimizer
         opt.zero_grad()
@@ -543,6 +544,7 @@ def main(args):
     logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
+        # resume_from_checkpoint="/workspace/byol-pytorch/log/moco/vit_small_16_l2o_4_pred_300e/1.4999999999999998_0_1024_0_0.1_0.1/version_0/checkpoints/epoch=39-step=50039.ckpt",
         gpus=torch.cuda.device_count(),
         max_epochs=args.max_epochs,
         default_root_dir="output/vit.model",
@@ -672,6 +674,9 @@ if __name__ == '__main__':
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA
             parameter for teacher update. The value is increased to 1 during training with cosine schedule.
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
+    parser.add_argument('--momentum_teacher_end', default=1.0, type=float, help="""Base EMA
+                parameter for teacher update. The value is increased to this value during training with cosine schedule.
+                We recommend setting a higher value with small batches: for example use 1 with batch size of 256.""")
     parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
     parser.add_argument('--dis_token', default=False, type=utils.bool_flag, help="distillation token")

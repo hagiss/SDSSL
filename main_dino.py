@@ -379,9 +379,9 @@ class DINOLoss(nn.Module):
         crops = self.ncrops * 12 if self.l2o is True else self.ncrops
         student_out = student_out.chunk(crops)
 
-        if self.l2o and student_detached is not None:
-            student_det = student_detached / self.student_temp
-            student_det = student_det.chunk(crops)
+        # if self.l2o and student_detached is not None:
+        #     student_det = student_detached / self.student_temp
+        #     student_det = student_det.chunk(crops)
 
         div = 12 if self.l2o is True else 1
 
@@ -392,8 +392,6 @@ class DINOLoss(nn.Module):
 
         total_loss_out = 0
         n_loss_out = 0
-        total_loss_head = 0
-        n_loss_head = 0
         total_loss_low = 0
         n_loss_low = 0
         for iq, q in enumerate(teacher_out):
@@ -402,10 +400,10 @@ class DINOLoss(nn.Module):
                     # we skip cases where student and teacher operate on the same view
                     continue
                 loss = torch.sum(-q * F.log_softmax(student_out[v], dim=-1), dim=-1).mean()
-                if self.l2o and student_detached is not None:
-                    loss_det = torch.sum(-q * F.log_softmax(student_det[v], dim=-1), dim=-1).mean()
-                    total_loss_head += loss_det
-                    n_loss_head += 1
+                # if self.l2o and student_detached is not None:
+                #     loss_det = torch.sum(-q * F.log_softmax(student_det[v], dim=-1), dim=-1).mean()
+                #     total_loss_head += loss_det
+                #     n_loss_head += 1
 
                 if self.l2o and v % div != 11:
                     total_loss_low += loss
@@ -414,14 +412,12 @@ class DINOLoss(nn.Module):
                     total_loss_out += loss
                     n_loss_out += 1
 
-        if self.l2o and n_loss_head > 0 and n_loss_low > 0:
+        if self.l2o and n_loss_low > 0:
             total_loss_low /= n_loss_low
-            total_loss_head /= n_loss_head
-            total_loss_head *= 12
         total_loss_out /= n_loss_out
-        total_loss = total_loss_out + total_loss_low + total_loss_head
+        # total_loss_out + total_loss_low
         self.update_center(teacher_output)
-        return total_loss
+        return total_loss_out, total_loss_low
 
     @torch.no_grad()
     def update_center(self, teacher_output):

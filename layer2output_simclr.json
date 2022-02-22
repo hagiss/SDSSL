@@ -14,7 +14,7 @@
   "warmup_epochs": 40,
   "min_lr": 0,
   "seed": 0,
-  "num_workers": 10,
+  "num_workers": 8,
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
   "dataset": "imagenet",
