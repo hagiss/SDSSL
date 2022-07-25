@@ -113,17 +113,14 @@ class NetWrapper(nn.Module):
             ret = []
             representation = rearrange(representation, "(d b) e -> d b e", d=12)
 
-            if momentum is None:
-                return representation[:-1], self.projector(representation[-1])
-
             for i, project in enumerate(self.projector):
                 ret.append(project(representation[i, :]))
 
             ret = torch.cat(ret)
+            return ret
         else:
-            ret = self.projector(representation)
+            return representation[:-1], self.projector(representation[-1])
 
-        return ret
 
     # x.shape is [12 * batch, out_dim]
     def predict(self, x, d=12):
