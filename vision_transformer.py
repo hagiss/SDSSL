@@ -167,6 +167,9 @@ class VisionTransformer(nn.Module):
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
+        self.norms = nn.ModuleList([
+            norm_layer(embed_dim) for _ in range(depth)
+        ])
 
         # Classifier head
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -302,10 +305,20 @@ class VisionTransformer(nn.Module):
         for i, blk in enumerate(self.blocks):
             x = blk(x)
             if len(self.blocks) - i <= n:
-                if i != 11 and self.dis_token is not None:
-                    output.append(self.norm(x)[:, 1])
-                else:
-                    output.append(self.norm(x)[:, 0])
+                output.append(self.norms[i](x)[:, 0])
+
+        return torch.cat(output, dim=0)
+
+    def forward_with_momentum(self, image, momentum_output):
+        x = self.prepare_tokens(image).unsqueeze(0)
+
+        x = torch.cat([x, momentum_output], dim=0)
+
+        output = []
+        for i, blk in enumerate(self.blocks):
+            temp = blk(x)
+            if len(self.blocks) - i <= n:
+                output.append(self.norms[i](temp)[:, 0])
 
         return torch.cat(output, dim=0)
 

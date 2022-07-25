@@ -96,35 +96,30 @@ class NetWrapper(nn.Module):
                     self.predictor.append(mlp2)
 
     def get_representation(self, x):
-        return self.forward(x, True)
-
-    def forward(self, x, return_embedding=False, epoch=None):
-        # if self.predictor is not None and return_embedding is False:
-        #     representation = self.net.get_intermediate_layers(x, 12)
-        # else:
-        #     representation = self.net(x)
-        if self.intermediate and return_embedding is False:
+        if self.intermediate:
             representation = self.net.get_intermediate_layers(x, 12)
         else:
             representation = self.net(x)
 
-        if return_embedding:
-            return representation
+        return representation
+
+    def forward(self, x, momentum=None):
+        if momentum is None:
+            representation = self.net.get_intermediate_layers(x, 12)
+        else:
+            representation = self.net.forward_with_momentum(x, momentum)
 
         if self.intermediate:
             ret = []
             representation = rearrange(representation, "(d b) e -> d b e", d=12)
+
+            if momentum is None:
+                return representation[:-1], self.projector(representation[-1])
+
             for i, project in enumerate(self.projector):
                 ret.append(project(representation[i, :]))
 
-            if self.up > 0:
-                last = ret[-1].unsqueeze(0)
-                last = repeat(last, "() b e -> (d b) e", d=self.up)
-                ret = torch.cat(ret[self.up:])
-                ret = torch.cat([ret, last])
-            else:
-                ret = torch.cat(ret)
-            # shape: [(d b) e] -> [12*batch, e]
+            ret = torch.cat(ret)
         else:
             ret = self.projector(representation)
 

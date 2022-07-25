@@ -213,7 +213,11 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+        m_repr1, teacher_output1 = self.teacher(image_one)
+        m_repr2, teacher_output2 = self.teacher(image_two)
+        student_output1 = self.student(image_two, m_repr2)
+        student_output2 = self.student(image_one, m_repr1)
+        return teacher_output1, student_output1, teacher_output2, student_output2
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
@@ -224,60 +228,27 @@ class PLLearner(pl.LightningModule):
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         # projections
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
-        # student_output1, student_detached1, student_proj1 = student_output1
-        # student_output2, student_detached2, student_proj2 = student_output2
-        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
-
-        loss_mid, loss_detached = 0, 0
-        if self.t_inter:
-            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
 
         teacher_output1 = concat_all_gather(teacher_output1)
         teacher_output2 = concat_all_gather(teacher_output2)
 
         if self.st_inter:
-            """manual update for predictor"""
-            student_detached1 = self.student.predict(student_output1.detach())
-            student_detached2 = self.student.predict(student_output2.detach())
-
-            loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
-
-            # opt = self.optimizer_pred
-            # opt.zero_grad()
-            # self.manual_backward(12 * loss_detached)
-            # opt.step()
-
             """compute loss for vit and projector (update predictor slightly)"""
             student_output1 = self.student.predict(student_output1)
             student_output2 = self.student.predict(student_output2)
 
-            student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_layer(student_mid1, teacher_output1) + self.info_nce_loss_layer(student_mid2, teacher_output2)
+            loss = self.info_nce_loss_layer(student_output1, teacher_output1, 12) + self.info_nce_loss_layer(
+                student_output2, teacher_output2, 12)
 
         else:
             student_output1 = self.student.predict(student_output1)
             student_output2 = self.student.predict(student_output2)
-
-        # if self.t_inter:
-        #     _, student_proj1 = torch.split(student_proj1, [batch_size, 11 * batch_size], dim=0)
-        #     _, student_proj2 = torch.split(student_proj2, [batch_size, 11 * batch_size], dim=0)
-        #     loss_mid += cos_fn(student_proj1, teacher_mid1) + cos_fn(student_proj2, teacher_mid2)
-
-
-        loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
-
-        # ratio = self.ratio if self.ratio > 0 else 11
-        loss = loss_output + self.ratio * loss_mid + 12 * loss_detached
+            loss = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
         opt = self.optimizer
         opt.zero_grad()
         self.manual_backward(loss)
         opt.step()
-        # loss = self.info_nce_loss(student_output1, teacher_output1)
-        # loss += self.info_nce_loss(student_output2, teacher_output2)
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
