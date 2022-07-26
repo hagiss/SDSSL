@@ -113,12 +113,14 @@ class NetWrapper(nn.Module):
             ret = []
 
             for i, project in enumerate(self.projector):
-                ret.append(project(representation[i, :, 0]))
+                # ret.append(project(representation[i, :, 0]))
+                ret.append(project(representation[i, :].mean(dim=1)))
 
             ret = torch.cat(ret)
             return ret
         else:
-            return representation[:-1], self.projector(representation[-1, :, 0])
+            # return representation[:-1], self.projector(representation[-1, :, 0])
+            return representation[:-1], self.projector(representation[-1, :].mean(dim=1))
 
 
     # x.shape is [12 * batch, out_dim]

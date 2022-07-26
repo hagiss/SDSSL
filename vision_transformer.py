@@ -162,14 +162,14 @@ class VisionTransformer(nn.Module):
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-        # self.blocks = nn.ModuleList([
-        #     Block(
-        #         dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-        #         drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-        #     for i in range(depth)])
-        self.block = Block(
-                            dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                            drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+        self.blocks = nn.ModuleList([
+            Block(
+                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+            for i in range(depth)])
+        # self.block = Block(
+        #                     dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+        #                     drop=drop_rate, attn_drop=attn_drop_rate, norm_layer=norm_layer)
         self.norm = norm_layer(embed_dim)
         self.norms = nn.ModuleList([
             norm_layer(embed_dim) for _ in range(depth)
@@ -290,6 +290,8 @@ class VisionTransformer(nn.Module):
         x = self.prepare_tokens(x, dino)
         for blk in self.blocks:
             x = blk(x)
+        # for i in range(self.depth):
+        #     x = self.block(x)
         x = self.norms[-1](x)
         return x[:, 0]
 
@@ -307,13 +309,13 @@ class VisionTransformer(nn.Module):
         x = self.prepare_tokens(x, dino)
         # we return the output tokens from the `n` last blocks
         output = []
-        # for i, blk in enumerate(self.blocks):
-        #     x = blk(x)
-        #     if len(self.blocks) - i <= n:
-        #         output.append(self.norms[i](x))
-        for i in range(self.depth):
-            x = self.block(x)
-            output.append(self.norms[i](x))
+        for i, blk in enumerate(self.blocks):
+            x = blk(x)
+            if len(self.blocks) - i <= n:
+                output.append(self.norms[i](x))
+        # for i in range(self.depth):
+        #     x = self.block(x)
+        #     output.append(self.norms[i](x))
 
         return torch.cat(output, dim=0)
 
@@ -323,12 +325,12 @@ class VisionTransformer(nn.Module):
         x = torch.cat([x, momentum_output], dim=0)
 
         output = []
-        # for i, blk in enumerate(self.blocks):
-        #     temp = blk(x[i])
-        #     output.append(self.norms[i](temp))
-        for i in range(self.depth):
-            temp = self.block(x[i])
+        for i, blk in enumerate(self.blocks):
+            temp = blk(x[i])
             output.append(self.norms[i](temp))
+        # for i in range(self.depth):
+        #     temp = self.block(x[i])
+        #     output.append(self.norms[i](temp))
 
         return torch.cat(output, dim=0)
 
