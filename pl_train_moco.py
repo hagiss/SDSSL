@@ -213,8 +213,9 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        m_repr1, teacher_output1 = self.teacher(image_one)
-        m_repr2, teacher_output2 = self.teacher(image_two)
+        with torch.no_grad():
+            m_repr1, teacher_output1 = self.teacher(image_one)
+            m_repr2, teacher_output2 = self.teacher(image_two)
         student_output1 = self.student(image_two, m_repr2)
         student_output2 = self.student(image_one, m_repr1)
         return teacher_output1, student_output1, teacher_output2, student_output2
@@ -411,12 +412,6 @@ def main(args):
         T.ToTensor(),
         # T.Lambda(expand_greyscale)
     ])
-    fine_transform = T.Compose([
-        T.RandomResizedCrop(224),
-        T.RandomHorizontalFlip(),
-        T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
     val_transform = T.Compose([
         T.Resize((256, 256), interpolation=3),
         T.CenterCrop((image_size, image_size)),
@@ -443,25 +438,12 @@ def main(args):
             path + '/val',
             val_transform
         )
-        fine_dataset = datasets.ImageFolder(
-            path + '/train',
-            fine_transform
-        )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
         # Subset(dataset, np.arange(64)),
-        batch_size=args.batch_size_per_gpu,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
-    )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
@@ -492,9 +474,10 @@ def main(args):
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
             dis_token=args.dis_token,
+            img_size=[image_size]
             # drop_path_rate=0.1,  # stochastic depth
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token,)
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token, img_size=[image_size])
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():

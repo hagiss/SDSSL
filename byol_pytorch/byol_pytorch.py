@@ -108,18 +108,17 @@ class NetWrapper(nn.Module):
             representation = self.net.get_intermediate_layers(x, 12)
         else:
             representation = self.net.forward_with_momentum(x, momentum)
-
+        representation = rearrange(representation, "(d b) s e -> d b s e", d=12)
         if self.intermediate:
             ret = []
-            representation = rearrange(representation, "(d b) e -> d b e", d=12)
 
             for i, project in enumerate(self.projector):
-                ret.append(project(representation[i, :]))
+                ret.append(project(representation[i, :, 0]))
 
             ret = torch.cat(ret)
             return ret
         else:
-            return representation[:-1], self.projector(representation[-1])
+            return representation[:-1], self.projector(representation[-1, :, 0])
 
 
     # x.shape is [12 * batch, out_dim]
