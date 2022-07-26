@@ -16,7 +16,7 @@
   "seed": 0,
   "num_workers": 4,
   "optimizer": "adamw",
-  "momentum_teacher": 0.996,
+  "momentum_teacher": 0.8,
   "dataset": "stl10",
   "name": "moco/vit_tiny_16_l2o",
   "accelerator": "ddp",
