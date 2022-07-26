@@ -216,8 +216,10 @@ class PLLearner(pl.LightningModule):
         with torch.no_grad():
             m_repr1, teacher_output1 = self.teacher(image_one)
             m_repr2, teacher_output2 = self.teacher(image_two)
-        student_output1 = self.student(image_two, m_repr2)
-        student_output2 = self.student(image_one, m_repr1)
+        # student_output1 = self.student(image_two, m_repr2)
+        # student_output2 = self.student(image_one, m_repr1)
+        student_output1 = self.student(image_two)
+        student_output2 = self.student(image_one)
         return teacher_output1, student_output1, teacher_output2, student_output2
 
     def training_step(self, batch, batch_idx):
@@ -251,7 +253,7 @@ class PLLearner(pl.LightningModule):
         self.manual_backward(loss)
         opt.step()
 
-        self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
+        self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step, prog_bar=True)
 
         self.momentum_update()
 

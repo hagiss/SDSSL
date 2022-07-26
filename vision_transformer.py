@@ -293,7 +293,7 @@ class VisionTransformer(nn.Module):
         # for i in range(self.depth):
         #     x = self.block(x)
         x = self.norms[-1](x)
-        return x[:, 0]
+        return x.mean(dim=1)
 
     def get_last_selfattention(self, x):
         x = self.prepare_tokens(x)
@@ -304,7 +304,7 @@ class VisionTransformer(nn.Module):
                 # return attention of the last block
                 return blk(x, return_attention=True)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def get_intermediate_layers(self, x, n=1, dino=False):
         x = self.prepare_tokens(x, dino)
         # we return the output tokens from the `n` last blocks
