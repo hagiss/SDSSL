@@ -193,7 +193,10 @@ class VisionTransformer(nn.Module):
                     nn.init.uniform_(m.weight, -val, val)
                 else:
                     nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
+                try:
+                    nn.init.zeros_(m.bias)
+                except:
+                    pass
             elif isinstance(m, (nn.LayerNorm, nn.GroupNorm, nn.BatchNorm2d)):
                 nn.init.zeros_(m.bias)
                 nn.init.ones_(m.weight)
