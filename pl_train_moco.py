@@ -253,7 +253,7 @@ class PLLearner(pl.LightningModule):
         self.manual_backward(loss)
         opt.step()
 
-        self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step, prog_bar=True)
+        # self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step, prog_bar=True)
 
         self.momentum_update()
 
