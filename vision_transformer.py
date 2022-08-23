@@ -291,6 +291,7 @@ class VisionTransformer(nn.Module):
     def forward(self, x, dino=False):
         x = self.prepare_tokens(x, dino)
         for blk in self.blocks:
+            x = torch.cat([x, x], dim=-1)
             x = blk(x)
         # for i in range(self.depth):
         #     x = self.block(x)
@@ -312,6 +313,7 @@ class VisionTransformer(nn.Module):
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
+            x = torch.cat([x, x], dim=-1)
             x = blk(x)
             if len(self.blocks) - i <= n:
                 output.append(self.norms[i](x))
@@ -331,7 +333,7 @@ class VisionTransformer(nn.Module):
             if i > 0:
                 temp = torch.cat([temp, x[i]], dim=-1)
             else:
-                temp = repeat(x[0], "b s d -> b s (r d)", r=2)
+                temp = torch.cat([x[0], x[0]], dim=-1)
             temp = blk(temp)
             output.append(self.norms[i](temp))
         # for i in range(self.depth):
