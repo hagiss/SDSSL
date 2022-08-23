@@ -2,6 +2,8 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="2b822351-6fca-4b8f-9ac0-3d00ecea22b5" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/layer2output_moco_10.json" beforeDir="false" afterPath="$PROJECT_DIR$/layer2output_moco_10.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pl_train_moco.py" beforeDir="false" afterPath="$PROJECT_DIR$/pl_train_moco.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -46,7 +48,7 @@
       <workItem from="1659679719685" duration="596000" />
       <workItem from="1659687237601" duration="592000" />
       <workItem from="1660705393435" duration="598000" />
-      <workItem from="1661229890437" duration="1026000" />
+      <workItem from="1661229890437" duration="2011000" />
     </task>
     <servers />
   </component>
