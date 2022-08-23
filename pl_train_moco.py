@@ -516,7 +516,7 @@ def main(args):
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=1
+        progress_bar_refresh_rate=0
     )
 
     trainer.fit(learner, data_loader, train_loader)
