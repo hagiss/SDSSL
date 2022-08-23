@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="2b822351-6fca-4b8f-9ac0-3d00ecea22b5" name="Default Changelist" comment="" />
+    <list default="true" id="2b822351-6fca-4b8f-9ac0-3d00ecea22b5" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/vision_transformer.py" beforeDir="false" afterPath="$PROJECT_DIR$/vision_transformer.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -11,6 +14,7 @@
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="ProjectId" id="25ugntcshcmnAQQdpeg3wYt65ZF" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
@@ -37,7 +41,13 @@
       <updated>1646382555919</updated>
       <workItem from="1646382557861" duration="2041000" />
       <workItem from="1655204749503" duration="59000" />
-      <workItem from="1658726919127" duration="19541000" />
+      <workItem from="1658726919127" duration="22584000" />
+      <workItem from="1659488384657" duration="636000" />
+      <workItem from="1659593271200" duration="593000" />
+      <workItem from="1659679719685" duration="596000" />
+      <workItem from="1659687237601" duration="592000" />
+      <workItem from="1660705393435" duration="598000" />
+      <workItem from="1661229890437" duration="379000" />
     </task>
     <servers />
   </component>
