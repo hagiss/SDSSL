@@ -117,7 +117,7 @@ class Block(nn.Module):
 
 
 class MLPBlock(nn.Module):
-    def __init__(self, dim, mlp_ratio=4., drop=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+    def __init__(self, dim, mlp_ratio=4., drop_path=0., drop=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -161,10 +161,11 @@ class VisionTransformer(nn.Module):
 
         self.projector = nn.Parameter(torch.zeros(num_patches, embed_dim, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
 
         self.blocks = nn.ModuleList([
             MLPBlock(
-                dim=embed_dim, mlp_ratio=mlp_ratio,
+                dim=embed_dim, mlp_ratio=mlp_ratio, drop_path=dpr[i],
                 drop=drop_rate, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
