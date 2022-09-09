@@ -120,6 +120,7 @@ class MLPBlock(nn.Module):
     def __init__(self, dim, mlp_ratio=4., drop=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
         self.norm1 = norm_layer(dim)
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
@@ -226,8 +227,6 @@ class VisionTransformer(nn.Module):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
         # x = x.detach()
-        print(x.shape)
-        print(self.projector.shape)
         x = torch.einsum('bld,lda->bla', [x, self.projector])
 
         x = torch.sum(x, dim=1)
