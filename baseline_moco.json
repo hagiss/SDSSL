@@ -6,7 +6,7 @@
   "weight_decay": 0.1,
   "weight_decay_end": 0.1,
   "clip_grad": 0,
-  "batch_size_per_gpu": 1024,
+  "batch_size_per_gpu": 128,
   "epochs": 300,
   "max_epochs": 300,
   "mlp_hidden": 4096,
