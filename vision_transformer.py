@@ -248,19 +248,19 @@ class VisionTransformer(nn.Module):
                 # return attention of the last block
                 return blk(x, return_attention=True)
 
-    def get_intermediate_layers(self, x, n=1, dino=False):
-        x = self.prepare_tokens(x, dino)
-        # we return the output tokens from the `n` last blocks
-        output = []
-        for i, blk in enumerate(self.blocks):
-            x = blk(x)
-            if len(self.blocks) - i <= n:
-                if i != 11 and self.dis_token is not None:
-                    output.append(self.norm(x)[:, 1])
-                else:
-                    output.append(self.norm(x)[:, 0])
-
-        return torch.cat(output, dim=0)
+    # def get_intermediate_layers(self, x, n=1, dino=False):
+    #     x = self.prepare_tokens(x, dino)
+    #     # we return the output tokens from the `n` last blocks
+    #     output = []
+    #     for i, blk in enumerate(self.blocks):
+    #         x = blk(x)
+    #         if len(self.blocks) - i <= n:
+    #             if i != 11 and self.dis_token is not None:
+    #                 output.append(self.norm(x)[:, 1])
+    #             else:
+    #                 output.append(self.norm(x)[:, 0])
+    #
+    #     return torch.cat(output, dim=0)
 
 
 def vit_tiny(patch_size=16, **kwargs):
