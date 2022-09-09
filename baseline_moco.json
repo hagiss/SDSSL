@@ -1,6 +1,6 @@
 {
   "arch": "vit_base",
-  "patch_size": 16,
+  "patch_size": 32,
   "out_dim": 256,
   "use_fp16": false,
   "weight_decay": 0.1,
