@@ -20,7 +20,7 @@ from functools import partial
 
 import torch
 import torch.nn as nn
-from einops import rearrange
+from einops import rearrange, repeat
 from functools import partial, reduce
 from operator import mul
 
@@ -116,6 +116,17 @@ class Block(nn.Module):
         return x
 
 
+class MLPBlock(nn.Module):
+    def __init__(self, dim, mlp_ratio=4., drop=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+    def forward(self, x):
+        x = x + self.drop_path(self.mlp(self.norm1(x)))
+        return x
+
 class PatchEmbed(nn.Module):
     """ Image to Patch Embedding
     """
@@ -147,24 +158,13 @@ class VisionTransformer(nn.Module):
             img_size=img_size[0], patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
 
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.dis_token = None
-        if dis_token:
-            self.dis_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-            nn.init.normal_(self.dis_token, std=1e-6)
-            print("Use distillation token!!")
-        self.build_2d_sincos_position_embedding()
-
-        #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 2, embed_dim))
-        # else:
-        #     self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.projector = nn.Parameter(torch.zeros(num_patches, embed_dim, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
-            Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+            MLPBlock(
+                dim=embed_dim, mlp_ratio=mlp_ratio,
+                drop=drop_rate, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 
@@ -188,7 +188,7 @@ class VisionTransformer(nn.Module):
             elif isinstance(m, (nn.LayerNorm, nn.GroupNorm, nn.BatchNorm2d)):
                 nn.init.zeros_(m.bias)
                 nn.init.ones_(m.weight)
-        nn.init.normal_(self.cls_token, std=1e-6)
+        nn.init.normal_(self.projector, std=0.02)
 
         if isinstance(self.patch_embed, PatchEmbed):
             # xavier_uniform initialization
@@ -199,44 +199,6 @@ class VisionTransformer(nn.Module):
             self.patch_embed.proj.weight.requires_grad = False
             self.patch_embed.proj.bias.requires_grad = False
 
-    # def _init_weights(self, m):
-    #     if isinstance(m, nn.Linear):
-    #         trunc_normal_(m.weight, std=.02)
-    #         if isinstance(m, nn.Linear) and m.bias is not None:
-    #             nn.init.constant_(m.bias, 0)
-    #     elif isinstance(m, nn.LayerNorm):
-    #         nn.init.constant_(m.bias, 0)
-    #         nn.init.constant_(m.weight, 1.0)
-
-    # def interpolate_pos_encoding(self, x, w, h):
-    #     sub_patch_num = 2 if self.dis_token is not None else 1
-    #     npatch = x.shape[1] - sub_patch_num
-    #     N = self.pos_embed.shape[1] - sub_patch_num
-    #     if npatch == N and w == h:
-    #         return self.pos_embed
-    #     class_pos_embed = self.pos_embed[:, 0]
-    #     if self.dis_token is not None:
-    #         patch_pos_embed = self.pos_embed[:, 1:-1]
-    #         dis_pos_embed = self.pos_embed[:, -1]
-    #     else:
-    #         patch_pos_embed = self.pos_embed[:, 1:]
-    #     dim = x.shape[-1]
-    #     w0 = w // self.patch_embed.patch_size
-    #     h0 = h // self.patch_embed.patch_size
-    #     # we add a small number to avoid floating point error in the interpolation
-    #     # see discussion at https://github.com/facebookresearch/dino/issues/8
-    #     w0, h0 = w0 + 0.1, h0 + 0.1
-    #     patch_pos_embed = nn.functional.interpolate(
-    #         patch_pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
-    #         scale_factor=(w0 / math.sqrt(N), h0 / math.sqrt(N)),
-    #         mode='bicubic',
-    #     )
-    #     assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
-    #     patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-    #     if self.dis_token is not None:
-    #         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed, dis_pos_embed.unsqueeze(0)), dim=1)
-    #     else:
-    #         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
 
     def build_2d_sincos_position_embedding(self, temperature=10000.):
         h, w = self.patch_embed.grid_size
@@ -260,24 +222,15 @@ class VisionTransformer(nn.Module):
         #     self.pos_embed = nn.Parameter(torch.cat([pe_token, pos_emb, di_token], dim=1))
         self.pos_embed.requires_grad = False
 
-    def prepare_tokens(self, x, dino=False):
+    def prepare_tokens(self, x):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
-        if dino is False:
-            x = x.detach()
+        # x = x.detach()
 
-        # add the [CLS] token to the embed patch tokens
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        if self.dis_token is not None:
-            dis_tokens = self.dis_token.expand(B, -1, -1)
-            x = torch.cat((cls_tokens, dis_tokens, x), dim=1)
-        else:
-            x = torch.cat((cls_tokens, x), dim=1)
+        x = torch.einsum('bld,lda->bla', [x, self.projector])
 
-        # add positional encoding to each token
-        x = x + self.pos_embed
-
-        return self.pos_drop(x)
+        # return self.pos_drop(x)
+        return x
 
     def forward(self, x, dino=False):
         x = self.prepare_tokens(x, dino)

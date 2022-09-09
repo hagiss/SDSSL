@@ -617,25 +617,10 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
-
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
-    # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-    #     during which we keep the output layer fixed. Typically doing so during
-    #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
             weight decay. With ViT, a smaller value at the beginning of training works well.""")
     parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
@@ -644,20 +629,6 @@ if __name__ == '__main__':
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
-
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,

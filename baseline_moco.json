@@ -1,5 +1,5 @@
 {
-  "arch": "vit_base",
+  "arch": "vit_small",
   "patch_size": 16,
   "out_dim": 256,
   "use_fp16": false,
@@ -17,8 +17,8 @@
   "num_workers": 10,
   "optimizer": "adamw",
   "momentum_teacher": 0.996,
-  "dataset": "imagenet",
-  "name": "moco/vit_base_16",
+  "dataset": "stl10",
+  "name": "moco/vit_small_16",
   "accelerator": "ddp",
   "accumulate": 1,
   "val_interval": 20,
