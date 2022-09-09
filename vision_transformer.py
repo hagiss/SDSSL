@@ -226,7 +226,8 @@ class VisionTransformer(nn.Module):
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
         # x = x.detach()
-
+        print(x.shape)
+        print(self.projector.shape)
         x = torch.einsum('bld,lda->bla', [x, self.projector])
 
         x = torch.sum(x, dim=1)
