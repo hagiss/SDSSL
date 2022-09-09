@@ -227,13 +227,13 @@ class VisionTransformer(nn.Module):
         x = self.patch_embed(x)  # patch linear embedding
         # x = x.detach()
 
-        x = torch.einsum('bld,lda->bla', [x, self.projector])
+        x = torch.einsum('bld,lda->ba', [x, self.projector])
 
         # return self.pos_drop(x)
         return x
 
     def forward(self, x, dino=False):
-        x = self.prepare_tokens(x, dino)
+        x = self.prepare_tokens(x)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
