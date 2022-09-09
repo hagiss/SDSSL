@@ -472,25 +472,12 @@ def main(args):
             path + '/val',
             val_transform
         )
-        fine_dataset = datasets.ImageFolder(
-            path + '/train',
-            fine_transform
-        )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
         # Subset(dataset, np.arange(64)),
-        batch_size=args.batch_size_per_gpu,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
-    )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
