@@ -238,7 +238,8 @@ class VisionTransformer(nn.Module):
     def forward(self, x, noise=None):
         x = self.prepare_tokens(x)
         if noise is not None:
-            l = nn.KLDivLoss(x, noise)
+            kl_loss = nn.KLDivLoss()
+            l = kl_loss(x, noise)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
