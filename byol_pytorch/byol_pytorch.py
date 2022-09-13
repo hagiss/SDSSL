@@ -107,6 +107,8 @@ class NetWrapper(nn.Module):
             representation = self.net.get_intermediate_layers(x, 12)
         else:
             representation = self.net(x, noise)
+        if noise is not None:
+            representation, l = representation
 
         if return_embedding:
             return representation
@@ -128,6 +130,8 @@ class NetWrapper(nn.Module):
         else:
             ret = self.projector(representation)
 
+        if noise is not None:
+            return ret, l
         return ret
 
     # x.shape is [12 * batch, out_dim]
