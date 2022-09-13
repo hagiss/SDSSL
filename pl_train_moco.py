@@ -213,7 +213,10 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+        noise = torch.normal(0, 1, size=(image_one.shape[0], self.student.net.embed_dim))
+        student1, loss1 = self.student(image_two, noise)
+        student2, loss2 = self.student(image_one, noise)
+        return self.teacher(image_one), student1, self.teacher(image_two), student2, loss1 + loss2
 
     def training_step(self, batch, batch_idx):
         images = batch[0]
@@ -223,7 +226,7 @@ class PLLearner(pl.LightningModule):
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
         # projections
-        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        teacher_output1, student_output1, teacher_output2, student_output2, kl_loss = self.forward(images)
         # student_output1, student_detached1, student_proj1 = student_output1
         # student_output2, student_detached2, student_proj2 = student_output2
         #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
@@ -270,7 +273,7 @@ class PLLearner(pl.LightningModule):
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
         # ratio = self.ratio if self.ratio > 0 else 11
-        loss = loss_output + self.ratio * loss_mid + 12 * loss_detached
+        loss = loss_output + self.ratio * loss_mid + 12 * loss_detached + 0.00001 * kl_loss
 
         opt = self.optimizer
         opt.zero_grad()

@@ -235,12 +235,16 @@ class VisionTransformer(nn.Module):
         # return self.pos_drop(x)
         return x
 
-    def forward(self, x, dino=False):
+    def forward(self, x, noise=None):
         x = self.prepare_tokens(x)
+        if noise is not None:
+            l = nn.KLDivLoss(x, noise)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
         # return x[:, 0]
+        if noise is not None:
+            return x, l
         return x
 
     def get_last_selfattention(self, x):
@@ -286,6 +290,7 @@ def vit_base(patch_size=16, **kwargs):
         patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
         qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
+
 
 def vit_large(patch_size=16, **kwargs):
     model = VisionTransformer(
