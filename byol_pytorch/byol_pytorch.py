@@ -98,7 +98,7 @@ class NetWrapper(nn.Module):
     def get_representation(self, x):
         return self.forward(x, True)
 
-    def forward(self, x, return_embedding=False, epoch=None):
+    def forward(self, x, return_embedding=False, noise=None):
         # if self.predictor is not None and return_embedding is False:
         #     representation = self.net.get_intermediate_layers(x, 12)
         # else:
@@ -106,7 +106,7 @@ class NetWrapper(nn.Module):
         if self.intermediate and return_embedding is False:
             representation = self.net.get_intermediate_layers(x, 12)
         else:
-            representation = self.net(x)
+            representation = self.net(x, noise)
 
         if return_embedding:
             return representation

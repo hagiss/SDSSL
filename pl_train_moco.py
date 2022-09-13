@@ -214,8 +214,8 @@ class PLLearner(pl.LightningModule):
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
         noise = torch.normal(0, 1, size=(image_one.shape[0], self.student.net.embed_dim))
-        student1, loss1 = self.student(image_two, noise)
-        student2, loss2 = self.student(image_one, noise)
+        student1, loss1 = self.student(image_two, noise=noise)
+        student2, loss2 = self.student(image_one, noise=noise)
         return self.teacher(image_one), student1, self.teacher(image_two), student2, loss1 + loss2
 
     def training_step(self, batch, batch_idx):
