@@ -73,7 +73,7 @@ class PLLearner(pl.LightningModule):
         # self.save_hyperparameters()
         self.ratio = 0
         self.st_inter = args.st_inter
-        self.t_inter = args.t_inter
+        self.t_inter = False
 
         teacher.load_state_dict(student.state_dict())
 
@@ -91,13 +91,10 @@ class PLLearner(pl.LightningModule):
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
-        # params_pred = utils.get_params_groups(self.student.predictor)
         if args.optimizer == "adamw":
             self.optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
-            # self.optimizer_pred = torch.optim.AdamW(params_pred)
         elif args.optimizer == "sgd":
             self.optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
-            # self.optimizer_pred = torch.optim.SGD(params_pred, lr=0, momentum=0.9)
         elif args.optimizer == "lars":
             self.optimizer = utils.LARS(params_groups)  # to use with convnet and large batches
 
@@ -105,9 +102,7 @@ class PLLearner(pl.LightningModule):
 
         # ============ init schedulers ... ============
         self.lr_schedule = utils.cosine_scheduler(
-            # args.lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
             args.lr * args.total_batch / 256.,
-            # args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
             args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
@@ -174,6 +169,24 @@ class PLLearner(pl.LightningModule):
     def configure_optimizers(self):
         return [self.optimizer]
 
+    # s2, t2 is for '- dimension'
+    def hyboloid_info_nce_loss(self, s1, s2, t1, t2):
+        batch_size = s1.shape[0]
+
+        labels = (torch.arange(batch_size, dtype=torch.long) + int(batch_size * torch.distributed.get_rank())).to(self.device)
+
+        rt2 = math.sqrt(2)
+
+        s1 = F.normalize(s1, dim=1)
+        t1 = F.normalize(t1, dim=1)
+        s2 = F.normalize(s2, dim=1) * rt2
+        t2 = F.normalize(t2, dim=1) * rt2
+
+        # s1^2 - s2^2 = -1
+
+        dis_mat = torch.matmul(s2, t2.T) - torch.matmul(s1, t1.T)
+        dis_mat = torch.arccosh(dis_mat)
+
     def info_nce_loss(self, s_features, t_features):
         batch_size = s_features.shape[0]
 
@@ -212,7 +225,7 @@ class PLLearner(pl.LightningModule):
         return 2*tau*loss
 
     def forward(self, x):
-        image_one, image_two = self.aug1(x), self.aug2(x)
+        image_one, image_two = x[0], x[1]
         return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
 
     def training_step(self, batch, batch_idx):
@@ -221,13 +234,7 @@ class PLLearner(pl.LightningModule):
 
         self.update_lr()
 
-        # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        # projections
         teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
-        # student_output1, student_detached1, student_proj1 = student_output1
-        # student_output2, student_detached2, student_proj2 = student_output2
-        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
 
         loss_mid, loss_detached = 0, 0
         if self.t_inter:
@@ -244,11 +251,6 @@ class PLLearner(pl.LightningModule):
 
             loss_detached = self.info_nce_loss_layer(student_detached1, teacher_output1, 12) + self.info_nce_loss_layer(student_detached2, teacher_output2, 12)
 
-            # opt = self.optimizer_pred
-            # opt.zero_grad()
-            # self.manual_backward(12 * loss_detached)
-            # opt.step()
-
             """compute loss for vit and projector (update predictor slightly)"""
             student_output1 = self.student.predict(student_output1)
             student_output2 = self.student.predict(student_output2)
@@ -261,23 +263,14 @@ class PLLearner(pl.LightningModule):
             student_output1 = self.student.predict(student_output1)
             student_output2 = self.student.predict(student_output2)
 
-        # if self.t_inter:
-        #     _, student_proj1 = torch.split(student_proj1, [batch_size, 11 * batch_size], dim=0)
-        #     _, student_proj2 = torch.split(student_proj2, [batch_size, 11 * batch_size], dim=0)
-        #     loss_mid += cos_fn(student_proj1, teacher_mid1) + cos_fn(student_proj2, teacher_mid2)
-
-
         loss_output = self.info_nce_loss(student_output1, teacher_output1) + self.info_nce_loss(student_output2, teacher_output2)
 
-        # ratio = self.ratio if self.ratio > 0 else 11
         loss = loss_output + self.ratio * loss_mid + 12 * loss_detached
 
         opt = self.optimizer
         opt.zero_grad()
         self.manual_backward(loss)
         opt.step()
-        # loss = self.info_nce_loss(student_output1, teacher_output1)
-        # loss += self.info_nce_loss(student_output2, teacher_output2)
 
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
 
@@ -294,13 +287,6 @@ class PLLearner(pl.LightningModule):
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-        # for i, param_group in enumerate(self.optimizer_pred.param_groups):
-        #     param_group["lr"] = self.lr_schedule[self.global_step]
-        #     if i == 0:
-        #         self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
-        #         param_group["weight_decay"] = self.wd_schedule[self.global_step]
-
-    # def on_before_zero_grad(self, _):
     def momentum_update(self):
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
@@ -404,14 +390,6 @@ class PLLearner(pl.LightningModule):
         self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
 
-# class Monitor(pl.Callback):
-#     def on_train_batch_start(self, pl_trainer, pl_module, batch, batch_idx, dataloader_idx):
-#         if batch_idx % 100 == 0:
-#             pl_logger = pl_trainer.logger
-#             pl_logger.experiment.add_histogram("input", batch, global_step=pl_trainer.global_step)
-#
-#
-
 def expand_greyscale(t):
     return t.expand(3, -1, -1)
 
@@ -426,31 +404,44 @@ def main(args):
     dataset = None
     dataset_train = None
     dataset_val = None
-    fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
-    # pretrain_transform = DataAugmentationDINO(
-    #     args.global_crops_scale,
-    #     args.local_crops_scale,
-    #     args.local_crops_number
-    # )
-    pretrain_transform = T.Compose([
-        T.Resize((256, 256), interpolation=Image.BICUBIC),
-        # T.CenterCrop(image_size),
-        T.ToTensor(),
-        # T.Lambda(expand_greyscale)
-    ])
-    fine_transform = T.Compose([
-        T.RandomResizedCrop(224),
+    image_size_before_crop = 96 if args.dataset == "stl10" else 256
+
+    normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+
+    augmentation1 = [
+        T.RandomResizedCrop(image_size, scale=(0.08, 1.)),
+        T.RandomApply([
+            T.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+        ], p=0.8),
+        T.RandomGrayscale(p=0.2),
+        T.RandomApply([utils.GaussianBlur([.1, 2.])], p=1.0),
         T.RandomHorizontalFlip(),
         T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
+        normalize
+    ]
+
+    augmentation2 = [
+        T.RandomResizedCrop(image_size, scale=(0.08, 1.)),
+        T.RandomApply([
+            T.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+        ], p=0.8),
+        T.RandomGrayscale(p=0.2),
+        T.RandomApply([utils.GaussianBlur([.1, 2.])], p=0.1),
+        T.RandomApply([utils.Solarize()], p=0.2),
+        T.RandomHorizontalFlip(),
+        T.ToTensor(),
+        normalize
+    ]
+
+    pretrain_transform = utils.TwoCropsTransform(T.Compose(augmentation1), T.Compose(augmentation2))
+
     val_transform = T.Compose([
-        T.Resize((256, 256), interpolation=3),
+        T.Resize((image_size_before_crop, image_size_before_crop), interpolation=3),
         T.CenterCrop((image_size, image_size)),
         T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        normalize,
     ])
 
     if args.dataset == "stl10":
@@ -458,8 +449,8 @@ def main(args):
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
-        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = 'dataset'
+        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
@@ -472,25 +463,12 @@ def main(args):
             path + '/val',
             val_transform
         )
-        fine_dataset = datasets.ImageFolder(
-            path + '/train',
-            fine_transform
-        )
     else:
         assert "error"
     # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
         # Subset(dataset, np.arange(64)),
-        batch_size=args.batch_size_per_gpu,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
-    )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
@@ -538,7 +516,7 @@ def main(args):
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
-    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu * args.multi_node
+    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
     clip = args.clip_grad
 
     args.image_size = image_size
@@ -571,23 +549,6 @@ def main(args):
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
 
-    # total_batch /= args.accumulate
-    # tuner = fine_tune.Tuner(learner.teacher, embed_dim, total_batch, len(fine_loader), 0.05)
-    # fine_trainer = pl.Trainer(
-    #     gpus=torch.cuda.device_count(),
-    #     max_epochs=100,
-    #     default_root_dir="output/vit.model",
-    #     accelerator=args.accelerator,
-    #     # logger=logger,
-    #     num_sanity_val_steps=0,
-    #     # accumulate_grad_batches=args.accumulate,
-    #     check_val_every_n_epoch=10,
-    #     sync_batchnorm=True,
-    #     callbacks=[lr_monitor],
-    #     progress_bar_refresh_rate=0
-    # )
-    # fine_trainer.fit(tuner, fine_loader, val_loader)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='byol')
@@ -597,16 +558,15 @@ if __name__ == '__main__':
 
     parser.add_argument('--lr', '-l', default=1e-5, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
-    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
+    parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=10, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
-    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
-    parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
-    parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
+    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of self-distillation')
+    # parser.add_argument('--up', default=12, type=int, help='skip layer')
+    parser.add_argument('--st_inter', default=False, type=bool, help='apply self-distillation')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
@@ -617,25 +577,11 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
 
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
             end of optimization. We use a cosine LR schedule with linear warmup.""")
-    # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-    #     during which we keep the output layer fixed. Typically doing so during
-    #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
             weight decay. With ViT, a smaller value at the beginning of training works well.""")
     parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
@@ -645,19 +591,6 @@ if __name__ == '__main__':
             gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
             help optimization for larger ViT architectures. 0 for disabling.""")
 
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
@@ -672,13 +605,10 @@ if __name__ == '__main__':
             mixed precision training (--use_fp16 false) to avoid unstabilities.""")
     parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of
             the DINO head output. For complex and large datasets large values (like 65k) work well.""")
-    parser.add_argument('--div', default=4, type=int, help="dividing hidden dimensions of mlp1")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA
             parameter for teacher update. The value is increased to 1 during training with cosine schedule.
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
-    parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
-                        help="Whether to use batch normalizations in projection head (Default: False)")
-    parser.add_argument('--dis_token', default=False, type=bool, help="distillation token")
+    parser.add_argument('--dis_token', default=False, type=utils.bool_flag, help="distillation token")
 
     hparam = parser.parse_args()
     if hparam.load_json:

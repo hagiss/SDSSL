@@ -18,7 +18,6 @@ import json
 import math
 import vision_transformer as vits
 from byol_pytorch import NetWrapper
-import fine_tune
 
 from PIL import Image
 

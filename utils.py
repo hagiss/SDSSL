@@ -33,39 +33,36 @@ import torch.distributed as dist
 from PIL import ImageFilter, ImageOps
 
 
+class TwoCropsTransform:
+    """Take two random crops of one image"""
+
+    def __init__(self, base_transform1, base_transform2):
+        self.base_transform1 = base_transform1
+        self.base_transform2 = base_transform2
+
+    def __call__(self, x):
+        im1 = self.base_transform1(x)
+        im2 = self.base_transform2(x)
+        return [im1, im2]
+
+
 class GaussianBlur(object):
-    """
-    Apply Gaussian Blur to the PIL image.
-    """
-    def __init__(self, p=0.5, radius_min=0.1, radius_max=2.):
-        self.prob = p
-        self.radius_min = radius_min
-        self.radius_max = radius_max
+    """Gaussian blur augmentation from SimCLR: https://arxiv.org/abs/2002.05709"""
 
-    def __call__(self, img):
-        do_it = random.random() <= self.prob
-        if not do_it:
-            return img
+    def __init__(self, sigma=[.1, 2.]):
+        self.sigma = sigma
 
-        return img.filter(
-            ImageFilter.GaussianBlur(
-                radius=random.uniform(self.radius_min, self.radius_max)
-            )
-        )
+    def __call__(self, x):
+        sigma = random.uniform(self.sigma[0], self.sigma[1])
+        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
+        return x
 
 
-class Solarization(object):
-    """
-    Apply Solarization to the PIL image.
-    """
-    def __init__(self, p):
-        self.p = p
+class Solarize(object):
+    """Solarize augmentation from BYOL: https://arxiv.org/abs/2006.07733"""
 
-    def __call__(self, img):
-        if random.random() < self.p:
-            return ImageOps.solarize(img)
-        else:
-            return img
+    def __call__(self, x):
+        return ImageOps.solarize(x)
 
 
 def load_pretrained_weights(model, pretrained_weights, checkpoint_key, model_name, patch_size):

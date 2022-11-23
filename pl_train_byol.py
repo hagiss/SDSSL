@@ -18,9 +18,8 @@ import json
 import math
 import numpy as np
 import vision_transformer as vits
-from byol_pytorch import NetWrapper
-import fine_tune
-import sys
+from byol_pytorch import NetWrapper, MLP
+
 
 from PIL import Image
 
@@ -45,37 +44,35 @@ class RandomApply(nn.Module):
         return self.fn(x)
 
 
-def concat_all_gather(tensor):
-    """
-    Performs all_gather operation on the provided tensors.
-    *** Warning ***: torch.distributed.all_gather has no gradient.
-    """
-    tensors_gather = [torch.ones_like(tensor)
-        for _ in range(torch.distributed.get_world_size())]
-    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
-
-    output = torch.cat(tensors_gather, dim=0)
-    return output
-
-
 def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
-    return (2 - 2 * (x * y).sum(dim=-1)).mean()
+    return 2 - 2 * (x * y).sum(dim=-1)
 
 
 class PLLearner(pl.LightningModule):
-    def __init__(self, student, length, val_loader, embed_dim, args):
+    def __init__(self, student, teacher, length, val_loader, embed_dim, args):
         super().__init__()
         # self.save_hyperparameters()
         self.ratio = args.ratio
         self.st_inter = args.st_inter
         self.t_inter = args.t_inter
-        self.temperature = 0.1
 
-        self.student = NetWrapper(student, embed_dim, args, prediction=False, intermediate=self.st_inter)
+        teacher.load_state_dict(student.state_dict())
 
-        print(f"Student is built: {args.arch} network.")
+        self.student = NetWrapper(student, embed_dim, args, prediction=True, intermediate=self.st_inter, last_bn=False)
+        self.teacher = NetWrapper(teacher, embed_dim, args, prediction=False, intermediate=self.t_inter, last_bn=False)
+
+        if self.st_inter != self.t_inter:
+            self.teacher.projector.load_state_dict(self.student.projector[-1].state_dict())
+        else:
+            self.teacher.projector.load_state_dict(self.student.projector.state_dict())
+
+        for p in self.teacher.parameters():
+            p.requires_grad = False
+        # for p in self.student.dummy_predictor.parameters():
+        #     p.requires_grad = False
+        print(f"Student and Teacher are built: they are both {args.arch} network.")
 
         # ============ preparing optimizer ... ============
         params_groups = utils.get_params_groups(self.student)
@@ -105,14 +102,16 @@ class PLLearner(pl.LightningModule):
         self.ratio_schedule = utils.cosine_scheduler(
             0, args.ratio,
             args.epochs, length,
+            # warmup_epochs=args.warmup_epochs,
         )
 
         # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
+        self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
+                                                        args.epochs, length)
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
-
         self.aug1 = torch.nn.Sequential(
             T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
             RandomApply(
@@ -147,12 +146,10 @@ class PLLearner(pl.LightningModule):
                 mean=torch.tensor([0.485, 0.456, 0.406]),
                 std=torch.tensor([0.229, 0.224, 0.225])),
         )
-        self.criterion = nn.CrossEntropyLoss()
-        self.automatic_optimization = False
+        self.i = 0
+        self.j = 1
 
-        self.labels = None
-        self.label = None
-        self.mask = None
+        self.automatic_optimization = False
 
         # self.fp16_scaler = None
         # if args.use_fp16:
@@ -163,86 +160,68 @@ class PLLearner(pl.LightningModule):
 
     def forward(self, x):
         image_one, image_two = self.aug1(x), self.aug2(x)
-        return self.student(image_one), self.student(image_two)
-
-    def info_nce_loss(self, features):
-        if self.labels is None:
-            b, _ = features.shape
-            self.labels = torch.cat([torch.arange(b/2) for i in range(2)], dim=0)
-            self.labels = (self.labels.unsqueeze(0) == self.labels.unsqueeze(1)).float()
-            self.labels.to(self.device)
-
-        features = F.normalize(features, dim=1)
-
-        similarity_matrix = torch.matmul(features, features.T)
-
-        if self.mask is None:
-            self.mask = torch.eye(self.labels.shape[0], dtype=torch.bool, device=self.device)
-        labels = self.labels[~self.mask].view(self.labels.shape[0], -1)
-        similarity_matrix = similarity_matrix[~self.mask].view(similarity_matrix.shape[0], -1)
-
-        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
-
-        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
-
-        logits = torch.cat([positives, negatives], dim=1)
-        if self.label is None:
-            self.label = torch.zeros(logits.shape[0], dtype=torch.long, device=self.device)
-
-        logits = logits / self.temperature
-        return self.criterion(logits, self.label)
-
-    def info_nce_loss_intermediate(self, layer_features, output):
-        b = layer_features.shape[0]
-
-        labels = torch.cat([torch.arange(b/11, dtype=torch.long, device=self.device) + int(b * torch.distributed.get_rank()) for _ in range(11)], dim=0)
-
-        output = concat_all_gather(output)
-
-        layer_features = F.normalize(layer_features, dim=1)
-        output = F.normalize(output, dim=1)
-
-        similarity_matrix = torch.matmul(layer_features, output.T)
-
-        logits = similarity_matrix / 0.1
-        loss = self.criterion(logits, labels)
-        return loss
+        # student_output1, student_output_pred1 = self.student(image_two)
+        # student_output2, student_output_pred2 = self.student(image_one)
+        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
 
     def training_step(self, batch, batch_idx):
+        # if self.i != self.j:
+        #     self.i += 1
+        #     self.student.dummy_predictor.load_state_dict(self.student.predictor.state_dict())
+
         images = batch[0]
         batch_size = images.shape[0]
-
         self.update_lr()
 
         # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        student_output1, student_output2 = self.forward(images)
+        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        # teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
 
-        # if self.st_inter != self.t_inter:
-        #     teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
-        #     teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
-
-        loss_mid = 0.0
+        loss_pred = 0
         if self.st_inter != self.t_inter:
+            teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
+            teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
+
+            # student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
+            # student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
+            # teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+            # teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+
+            student_pred1 = self.student.predict(student_output1.detach(), d=12)
+            student_pred2 = self.student.predict(student_output2.detach(), d=12)
+            loss_pred = loss_fn(student_pred1, teacher_output1).mean()
+            loss_pred += loss_fn(student_pred2, teacher_output2).mean()
+            loss_pred *= 12
+
+        student_output1 = self.student.predict(student_output1, d=12)
+        student_output2 = self.student.predict(student_output2, d=12)
+
+        if self.ratio > 0:
             student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            loss_mid = self.info_nce_loss_intermediate(student_mid1, student_output2.detach()) + self.info_nce_loss_intermediate(student_mid2, student_output1.detach())
-        loss_output = self.info_nce_loss(torch.cat((student_output1, student_output2), dim=0))
-        # if self.ratio > 0:
-        #     ratio = self.ratio
-        # else:
-        #     ratio = 11
-        loss = loss_output + self.ratio * loss_mid
+            teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
+            teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
+
+            # student_mid1 = self.student.predict(student_mid1, d=11)
+            # student_mid2 = self.student.predict(student_mid2, d=11)
+
+            loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
+            loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
+            loss = loss_output + self.ratio * loss_mid
+        else:
+            loss = loss_fn(student_output1, teacher_output1).mean()
+            loss += loss_fn(student_output2, teacher_output2).mean()
+
+        loss += loss_pred
 
         opt = self.optimizer
         opt.zero_grad()
         self.manual_backward(loss)
         opt.step()
 
-        print('loss', loss.detach().item())
-        print('loss_mid', loss_mid.detach().item())
-
-
         self.logger.experiment.add_scalar('loss', loss.detach().item(), self.global_step)
+
+        self.momentum_update()
 
         return {'loss': loss}
 
@@ -254,26 +233,28 @@ class PLLearner(pl.LightningModule):
                 self.logger.experiment.add_scalar('lr', self.lr_schedule[self.global_step], self.global_step)
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
-    # def on_before_zero_grad(self, _):
-    #     m = self.momentum_schedule[self.global_step]
-    #     for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
-    #         old_weight, up_weight = ma_params.data, current_params.data
-    #         ma_params.data = old_weight * m + (1 - m) * up_weight
-    #
-    #     if self.st_inter != self.t_inter:
-    #         for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
-    #             old_weight, up_weight = ma_params.data, current_params.data
-    #             ma_params.data = old_weight * m + (1 - m) * up_weight
-    #     else:
-    #         for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
-    #             old_weight, up_weight = ma_params.data, current_params.data
-    #             ma_params.data = old_weight * m + (1 - m) * up_weight
+    def momentum_update(self):
+        # self.j += 1
+        m = self.momentum_schedule[self.global_step]
+        for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
+            old_weight, up_weight = ma_params.data, current_params.data
+            ma_params.data = old_weight * m + (1 - m) * up_weight
+
+        if self.st_inter != self.t_inter:
+            for current_params, ma_params in zip(self.student.projector[-1].parameters(), self.teacher.projector.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
+        else:
+            for current_params, ma_params in zip(self.student.projector.parameters(), self.teacher.projector.parameters()):
+                old_weight, up_weight = ma_params.data, current_params.data
+                ma_params.data = old_weight * m + (1 - m) * up_weight
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
+        # torch.cuda.empty_cache()
         x, label = batch
 
-        features = self.student.get_representation(x).detach().cpu()
+        features = self.teacher.get_representation(x).detach().cpu()
         return {'features': features, 'labels': label}
 
     @torch.no_grad()
@@ -305,8 +286,8 @@ class PLLearner(pl.LightningModule):
         # print(len(self.val_loader))
 
         for batch in self.val_loader:
-            features = self.student.get_representation(batch[0].to(self.device))
-            features = F.normalize(features, dim=1)
+            features = self.teacher.get_representation(batch[0].to(self.device))
+            features = F.normalize(features, dim=1)#.cpu()
             # print("features", features)
             targets = batch[1].to(self.device)
             # print(targets)
@@ -383,25 +364,26 @@ def main(args):
     fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
+    image_size_resized = 96 if args.dataset == "stl10" else 256
     # pretrain_transform = DataAugmentationDINO(
     #     args.global_crops_scale,
     #     args.local_crops_scale,
     #     args.local_crops_number
     # )
     pretrain_transform = T.Compose([
-        T.Resize((256, 256), interpolation=Image.BICUBIC),
+        T.Resize((image_size_resized, image_size_resized), interpolation=Image.BICUBIC),
         # T.CenterCrop(image_size),
         T.ToTensor(),
         # T.Lambda(expand_greyscale)
     ])
     fine_transform = T.Compose([
-        T.RandomResizedCrop(224),
+        T.RandomResizedCrop(image_size),
         T.RandomHorizontalFlip(),
         T.ToTensor(),
         T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
     val_transform = T.Compose([
-        T.Resize((256, 256), interpolation=3),
+        T.Resize((image_size_resized, image_size_resized), interpolation=3),
         T.CenterCrop((image_size, image_size)),
         T.ToTensor(),
         T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -411,6 +393,7 @@ def main(args):
         dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
+        fine_dataset = datasets.STL10(args.data, split='train', download=True, transform=fine_transform)
     elif args.dataset == "imagenet":
         path = 'dataset'
         # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
@@ -442,9 +425,9 @@ def main(args):
         drop_last=True,
         pin_memory=True,
     )
-    fine_loader1 = DataLoader(
+    fine_loader = DataLoader(
         fine_dataset,
-        # Subset(fine_dataset, np.arange(1024)),
+        # Subset(fine_dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
@@ -464,7 +447,6 @@ def main(args):
     # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         dataset_val,
-        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=False,
         num_workers=args.num_workers,
@@ -475,11 +457,14 @@ def main(args):
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
             patch_size=args.patch_size,
+            # drop_path_rate=0.1,  # stochastic depth
         )
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
         student = torchvision_models.__dict__[args.arch]()
+        teacher = torchvision_models.__dict__[args.arch]()
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
@@ -489,44 +474,39 @@ def main(args):
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
-    total_batch = torch.cuda.device_count() * args.batch_size_per_gpu
+    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu * args.multi_node
     clip = args.clip_grad
 
     args.image_size = image_size
     args.total_batch = total_batch
-    args.optimizer = 'adamw'
 
-    learner = PLLearner.load_from_checkpoint("/data/byol-pytorch/log/byol_img/vit_base_100e/75_30_1024_0.3/version_1/checkpoints/epoch=10-step=12676.ckpt",
-                                             student=student,
-                                             length=len(data_loader),
-                                             val_loader=val_loader,
-                                             embed_dim=embed_dim,
-                                             args=args)
+    learner = PLLearner(student, teacher, len(data_loader), val_loader, embed_dim, args)
 
-    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_linear")
+    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
-
-    model = learner.student
-    for p in model.parameters():
-        p.requires_grad = False
-
-    model.eval()
-
-    tuner = fine_tune.Tuner(model, embed_dim, total_batch, len(fine_loader1), args.lr)
-    fine_trainer = pl.Trainer(
+    trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
-        max_epochs=100,
+        max_epochs=args.max_epochs,
         default_root_dir="output/vit.model",
         accelerator=args.accelerator,
         logger=logger,
         num_sanity_val_steps=0,
-        # accumulate_grad_batches=1,
-        check_val_every_n_epoch=10,
+        gradient_clip_val=args.clip_grad,
+        accumulate_grad_batches=args.accumulate,
+        check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
         progress_bar_refresh_rate=0
     )
-    fine_trainer.fit(tuner, fine_loader1, val_loader)
+
+    trainer.fit(learner, data_loader, train_loader)
+
+    if utils.get_rank() == 0:
+        print("top1", total_acc_t1)
+        print("best top1", max(total_acc_t1))
+        print("top5", total_acc_t5)
+        print("best top5", max(total_acc_t5))
+
 
 
 if __name__ == '__main__':
@@ -537,7 +517,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--lr', '-l', default=1e-5, type=float, help='learning rate')
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
-    parser.add_argument('--max_epochs', type=int, default=100, help="epochs for actual training")
+    parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
     parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
@@ -545,8 +525,8 @@ if __name__ == '__main__':
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
     parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=utils.bool_flag, help='intermediate representation of student')
-    parser.add_argument('--t_inter', default=False, type=utils.bool_flag, help='intermediate representation of teacher')
+    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
+    parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
