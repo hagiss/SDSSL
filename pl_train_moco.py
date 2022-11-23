@@ -125,40 +125,6 @@ class PLLearner(pl.LightningModule):
 
         self.val_loader = val_loader
 
-        self.aug1 = torch.nn.Sequential(
-            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
-            RandomApply(
-                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
-                p=0.3
-            ),
-            T.RandomGrayscale(p=0.2),
-            T.RandomHorizontalFlip(),
-            RandomApply(
-                T.GaussianBlur(23, [.1, 2.]),
-                p=1.0
-            ),
-            T.Normalize(
-                mean=torch.tensor([0.485, 0.456, 0.406]),
-                std=torch.tensor([0.229, 0.224, 0.225])),
-        )
-
-        self.aug2 = torch.nn.Sequential(
-            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
-            RandomApply(
-                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
-                p=0.3
-            ),
-            T.RandomGrayscale(p=0.2),
-            T.RandomHorizontalFlip(),
-            RandomApply(
-                T.GaussianBlur(23, [.1, 2.]),
-                p=0.1
-            ),
-            T.RandomSolarize(130, 0.2),
-            T.Normalize(
-                mean=torch.tensor([0.485, 0.456, 0.406]),
-                std=torch.tensor([0.229, 0.224, 0.225])),
-        )
         self.criterion = nn.CrossEntropyLoss()
         self.automatic_optimization = False
 
@@ -224,17 +190,16 @@ class PLLearner(pl.LightningModule):
         loss = self.criterion(logits, labels)
         return 2*tau*loss
 
-    def forward(self, x):
-        image_one, image_two = x[0], x[1]
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+    def forward(self, x1, x2):
+        return self.teacher(x1), self.student(x2), self.teacher(x2), self.student(x1)
 
     def training_step(self, batch, batch_idx):
-        images = batch[0]
-        batch_size = images.shape[0]
+        image1, image2 = batch[0][0], batch[0][1]
+        batch_size = image1.shape[0]
 
         self.update_lr()
 
-        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(image1, image2)
 
         loss_mid, loss_detached = 0, 0
         if self.t_inter:
@@ -497,11 +462,12 @@ def main(args):
 
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
+            img_size=[image_size],
             patch_size=args.patch_size,
             dis_token=args.dis_token,
             # drop_path_rate=0.1,  # stochastic depth
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token,)
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token, img_size=[image_size])
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
