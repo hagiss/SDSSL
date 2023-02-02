@@ -1,6 +1,3 @@
-
-## Implementation of SDSSL will be soon
-=======
 # Self-Distilled Self-supervised Representation Learning [WACV 2023]
 
 > Jiho Jang, Seonhoon Kim, Kiyoon Yoo, Chaerin Kong, Jangho Kim, Nojun Kwak
