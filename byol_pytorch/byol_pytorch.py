@@ -62,11 +62,6 @@ class NetWrapper(nn.Module):
         self.predictor = None
         self.projection_hidden_size = args.mlp_hidden
 
-        # if prediction:
-        #     self.predictor = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
-        #     self.dummy_predictor = MLP(args.out_dim, args.out_dim, args.mlp_hidden)
-
-
         self.up = args.up
 
         if intermediate is False:
@@ -99,10 +94,6 @@ class NetWrapper(nn.Module):
         return self.forward(x, True)
 
     def forward(self, x, return_embedding=False, epoch=None):
-        # if self.predictor is not None and return_embedding is False:
-        #     representation = self.net.get_intermediate_layers(x, 12)
-        # else:
-        #     representation = self.net(x)
         if self.intermediate and return_embedding is False:
             representation = self.net.get_intermediate_layers(x, 12)
         else:

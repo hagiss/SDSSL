@@ -135,24 +135,6 @@ class PLLearner(pl.LightningModule):
     def configure_optimizers(self):
         return [self.optimizer]
 
-    # s2, t2 is for '- dimension'
-    def hyboloid_info_nce_loss(self, s1, s2, t1, t2):
-        batch_size = s1.shape[0]
-
-        labels = (torch.arange(batch_size, dtype=torch.long) + int(batch_size * torch.distributed.get_rank())).to(self.device)
-
-        rt2 = math.sqrt(2)
-
-        s1 = F.normalize(s1, dim=1)
-        t1 = F.normalize(t1, dim=1)
-        s2 = F.normalize(s2, dim=1) * rt2
-        t2 = F.normalize(t2, dim=1) * rt2
-
-        # s1^2 - s2^2 = -1
-
-        dis_mat = torch.matmul(s2, t2.T) - torch.matmul(s1, t1.T)
-        dis_mat = torch.arccosh(dis_mat)
-
     def info_nce_loss(self, s_features, t_features):
         batch_size = s_features.shape[0]
 
@@ -415,12 +397,13 @@ def main(args):
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
     elif args.dataset == "imagenet":
         # path = 'dataset'
-        path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = args.data
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
         )
-        dataset_train = datasets.ImageFolder(
+        dataset_train = datasets.ImageFolder(          # for knn evaluation
             path + '/train',
             val_transform
         )
@@ -430,27 +413,21 @@ def main(args):
         )
     else:
         assert "error"
-    # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
-        # Subset(dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
         pin_memory=True,
     )
-    # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
-        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
-        # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
     )
-    # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         dataset_val,
         batch_size=args.batch_size_per_gpu,
@@ -465,7 +442,6 @@ def main(args):
             img_size=[image_size],
             patch_size=args.patch_size,
             dis_token=args.dis_token,
-            # drop_path_rate=0.1,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token, img_size=[image_size])
         embed_dim = student.embed_dim
@@ -476,9 +452,6 @@ def main(args):
         embed_dim = student.fc.weight.shape[1]
     else:
         print(f"Unknow architecture: {args.arch}")
-
-    # student = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
-    # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
 
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
@@ -531,7 +504,6 @@ if __name__ == '__main__':
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
     parser.add_argument('--ratio', default=1, type=float, help='loss ratio of self-distillation')
-    # parser.add_argument('--up', default=12, type=int, help='skip layer')
     parser.add_argument('--st_inter', default=False, type=bool, help='apply self-distillation')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',

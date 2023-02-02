@@ -87,9 +87,7 @@ class PLLearner(pl.LightningModule):
 
         # ============ init schedulers ... ============
         self.lr_schedule = utils.cosine_scheduler(
-            # args.lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,  # linear scaling rule
             args.lr * args.total_batch / 256.,
-            # args.min_lr * (args.accumulate * args.batch_size_per_gpu * torch.cuda.device_count()) / 256.,
             args.min_lr,
             args.epochs, length,
             warmup_epochs=args.warmup_epochs,
@@ -102,90 +100,35 @@ class PLLearner(pl.LightningModule):
         self.ratio_schedule = utils.cosine_scheduler(
             0, args.ratio,
             args.epochs, length,
-            # warmup_epochs=args.warmup_epochs,
         )
 
-        # print(length)
         # momentum parameter is increased to 1. during training with a cosine schedule
         self.momentum_schedule = utils.cosine_scheduler(args.momentum_teacher, 1,
                                                         args.epochs, length)
         print(f"Loss, optimizer and schedulers ready.")
 
         self.val_loader = val_loader
-        self.aug1 = torch.nn.Sequential(
-            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
-            RandomApply(
-                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
-                p=0.3
-            ),
-            T.RandomGrayscale(p=0.2),
-            T.RandomHorizontalFlip(),
-            RandomApply(
-                T.GaussianBlur(23, [.1, 2.]),
-                p=1.0
-            ),
-            T.Normalize(
-                mean=torch.tensor([0.485, 0.456, 0.406]),
-                std=torch.tensor([0.229, 0.224, 0.225])),
-        )
-
-        self.aug2 = torch.nn.Sequential(
-            T.RandomResizedCrop((args.image_size, args.image_size), scale=(0.08, 1.)),
-            RandomApply(
-                T.ColorJitter(0.4, 0.4, 0.2, 0.1),
-                p=0.3
-            ),
-            T.RandomGrayscale(p=0.2),
-            T.RandomHorizontalFlip(),
-            RandomApply(
-                T.GaussianBlur(23, [.1, 2.]),
-                p=0.1
-            ),
-            T.RandomSolarize(130, 0.2),
-            T.Normalize(
-                mean=torch.tensor([0.485, 0.456, 0.406]),
-                std=torch.tensor([0.229, 0.224, 0.225])),
-        )
-        self.i = 0
-        self.j = 1
 
         self.automatic_optimization = False
-
-        # self.fp16_scaler = None
-        # if args.use_fp16:
-        #     self.fp16_scaler = torch.cuda.amp.GradScaler()
 
     def configure_optimizers(self):
         return [self.optimizer]
 
-    def forward(self, x):
-        image_one, image_two = self.aug1(x), self.aug2(x)
-        # student_output1, student_output_pred1 = self.student(image_two)
-        # student_output2, student_output_pred2 = self.student(image_one)
-        return self.teacher(image_one), self.student(image_two), self.teacher(image_two), self.student(image_one)
+    def forward(self, x1, x2):
+        return self.teacher(x1), self.student(x2), self.teacher(x2), self.student(x1)
 
     def training_step(self, batch, batch_idx):
-        # if self.i != self.j:
-        #     self.i += 1
-        #     self.student.dummy_predictor.load_state_dict(self.student.predictor.state_dict())
-
-        images = batch[0]
-        batch_size = images.shape[0]
+        images1, images2 = batch[0][0], batch[0][1]
+        batch_size = images1.shape[0]
         self.update_lr()
 
-        # with torch.cuda.amp.autocast(self.fp16_scaler is not None):
-        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
-        # teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images)
+        teacher_output1, student_output1, teacher_output2, student_output2 = self.forward(images1, images2)
 
         loss_pred = 0
         if self.st_inter != self.t_inter:
+            # to compute byol loss for intermediate layers
             teacher_output1 = repeat(teacher_output1.unsqueeze(0), '() b e -> (d b) e', d=12)
             teacher_output2 = repeat(teacher_output2.unsqueeze(0), '() b e -> (d b) e', d=12)
-
-            # student_mid1, student_output1 = torch.split(student_output1, [batch_size * 11, batch_size], dim=0)
-            # student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
-            # teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
-            # teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
 
             student_pred1 = self.student.predict(student_output1.detach(), d=12)
             student_pred2 = self.student.predict(student_output2.detach(), d=12)
@@ -201,9 +144,6 @@ class PLLearner(pl.LightningModule):
             student_mid2, student_output2 = torch.split(student_output2, [batch_size * 11, batch_size], dim=0)
             teacher_mid1, teacher_output1 = torch.split(teacher_output1, [batch_size * 11, batch_size], dim=0)
             teacher_mid2, teacher_output2 = torch.split(teacher_output2, [batch_size * 11, batch_size], dim=0)
-
-            # student_mid1 = self.student.predict(student_mid1, d=11)
-            # student_mid2 = self.student.predict(student_mid2, d=11)
 
             loss_mid = loss_fn(student_mid1, teacher_mid1).mean() + loss_fn(student_mid2, teacher_mid2).mean()
             loss_output = loss_fn(student_output1, teacher_output1).mean() + loss_fn(student_output2, teacher_output2).mean()
@@ -234,7 +174,6 @@ class PLLearner(pl.LightningModule):
                 param_group["weight_decay"] = self.wd_schedule[self.global_step]
 
     def momentum_update(self):
-        # self.j += 1
         m = self.momentum_schedule[self.global_step]
         for current_params, ma_params in zip(self.student.net.parameters(), self.teacher.net.parameters()):
             old_weight, up_weight = ma_params.data, current_params.data
@@ -337,15 +276,6 @@ class PLLearner(pl.LightningModule):
         self.logger.experiment.add_scalar('top5', top5, self.current_epoch)
 
 
-
-# class Monitor(pl.Callback):
-#     def on_train_batch_start(self, pl_trainer, pl_module, batch, batch_idx, dataloader_idx):
-#         if batch_idx % 100 == 0:
-#             pl_logger = pl_trainer.logger
-#             pl_logger.experiment.add_histogram("input", batch, global_step=pl_trainer.global_step)
-#
-#
-
 def expand_greyscale(t):
     return t.expand(3, -1, -1)
 
@@ -361,47 +291,59 @@ def main(args):
     dataset = None
     dataset_train = None
     dataset_val = None
-    fine_dataset = None
 
     image_size = 96 if args.dataset == "stl10" else 224
-    image_size_resized = 96 if args.dataset == "stl10" else 256
-    # pretrain_transform = DataAugmentationDINO(
-    #     args.global_crops_scale,
-    #     args.local_crops_scale,
-    #     args.local_crops_number
-    # )
-    pretrain_transform = T.Compose([
-        T.Resize((image_size_resized, image_size_resized), interpolation=Image.BICUBIC),
-        # T.CenterCrop(image_size),
-        T.ToTensor(),
-        # T.Lambda(expand_greyscale)
-    ])
-    fine_transform = T.Compose([
-        T.RandomResizedCrop(image_size),
+    image_size_before_crop = 96 if args.dataset == "stl10" else 256
+
+    normalize = T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+
+    augmentation1 = [
+        T.RandomResizedCrop(image_size, scale=(0.08, 1.)),
+        T.RandomApply([
+            T.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+        ], p=0.8),
+        T.RandomGrayscale(p=0.2),
+        T.RandomApply([utils.GaussianBlur([.1, 2.])], p=1.0),
         T.RandomHorizontalFlip(),
         T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
+        normalize
+    ]
+
+    augmentation2 = [
+        T.RandomResizedCrop(image_size, scale=(0.08, 1.)),
+        T.RandomApply([
+            T.ColorJitter(0.4, 0.4, 0.2, 0.1)  # not strengthened
+        ], p=0.8),
+        T.RandomGrayscale(p=0.2),
+        T.RandomApply([utils.GaussianBlur([.1, 2.])], p=0.1),
+        T.RandomApply([utils.Solarize()], p=0.2),
+        T.RandomHorizontalFlip(),
+        T.ToTensor(),
+        normalize
+    ]
+
+    pretrain_transform = utils.TwoCropsTransform(T.Compose(augmentation1), T.Compose(augmentation2))
+
     val_transform = T.Compose([
-        T.Resize((image_size_resized, image_size_resized), interpolation=3),
+        T.Resize((image_size_before_crop, image_size_before_crop), interpolation=3),
         T.CenterCrop((image_size, image_size)),
         T.ToTensor(),
-        T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        normalize,
     ])
 
     if args.dataset == "stl10":
         dataset = datasets.STL10(args.data, split='unlabeled', download=True, transform=pretrain_transform)
         dataset_train = datasets.STL10(args.data, split='train', download=True, transform=val_transform)
         dataset_val = datasets.STL10(args.data, split='test', download=True, transform=val_transform)
-        fine_dataset = datasets.STL10(args.data, split='train', download=True, transform=fine_transform)
     elif args.dataset == "imagenet":
-        path = 'dataset'
+        # path = 'dataset'
         # path = '/data/dataset/imagenet_cls_loc/CLS_LOC/ILSVRC2015/Data/CLS-LOC'
+        path = args.data
         dataset = datasets.ImageFolder(
             path + '/train',
             pretrain_transform
         )
-        dataset_train = datasets.ImageFolder(
+        dataset_train = datasets.ImageFolder(  # for knn evaluation
             path + '/train',
             val_transform
         )
@@ -409,42 +351,23 @@ def main(args):
             path + '/val',
             val_transform
         )
-        fine_dataset = datasets.ImageFolder(
-            path + '/train',
-            fine_transform
-        )
     else:
         assert "error"
-    # sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = DataLoader(
         dataset,
-        # Subset(dataset, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
         pin_memory=True,
     )
-    fine_loader = DataLoader(
-        fine_dataset,
-        # Subset(fine_dataset, np.arange(64)),
-        batch_size=args.batch_size_per_gpu,
-        shuffle=True,
-        num_workers=args.num_workers,
-        drop_last=True,
-        pin_memory=True,
-    )
-    # sampler_train = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     train_loader = DataLoader(
         dataset_train,
-        # Subset(dataset_train, np.arange(64)),
         batch_size=args.batch_size_per_gpu,
-        # sampler=sampler_train,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
     )
-    # sampler_val = torch.utils.data.DistributedSampler(dataset_val, shuffle=False)
     val_loader = DataLoader(
         dataset_val,
         batch_size=args.batch_size_per_gpu,
@@ -456,10 +379,11 @@ def main(args):
 
     if args.arch in vits.__dict__.keys():
         student = vits.__dict__[args.arch](
+            img_size=[image_size],
             patch_size=args.patch_size,
-            # drop_path_rate=0.1,  # stochastic depth
+            dis_token=args.dis_token,
         )
-        teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
+        teacher = vits.__dict__[args.arch](patch_size=args.patch_size, dis_token=args.dis_token, img_size=[image_size])
         embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
@@ -469,12 +393,9 @@ def main(args):
     else:
         print(f"Unknow architecture: {args.arch}")
 
-    # student = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
-    # teacher = torchvision_models.resnet18(pretrained=False, num_classes=args.out_dim)
-
     lr = args.lr * 10000
     min_lr = args.min_lr * 10000
-    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu * args.multi_node
+    total_batch = torch.cuda.device_count() * args.accumulate * args.batch_size_per_gpu
     clip = args.clip_grad
 
     args.image_size = image_size
@@ -482,7 +403,11 @@ def main(args):
 
     learner = PLLearner(student, teacher, len(data_loader), val_loader, embed_dim, args)
 
-    logger = pl.loggers.TensorBoardLogger(args.board_path, name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr, total_batch, clip, args.weight_decay, args.weight_decay_end))
+    logger = pl.loggers.TensorBoardLogger(args.board_path,
+                                          name=args.name + "_{}e/{}_{}_{}_{}_{}_{}".format(args.epochs, lr, min_lr,
+                                                                                           total_batch, clip,
+                                                                                           args.weight_decay,
+                                                                                           args.weight_decay_end))
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
         gpus=torch.cuda.device_count(),
@@ -496,7 +421,7 @@ def main(args):
         check_val_every_n_epoch=args.val_interval,
         sync_batchnorm=True,
         callbacks=[lr_monitor],
-        progress_bar_refresh_rate=0
+        progress_bar_refresh_rate=1
     )
 
     trainer.fit(learner, data_loader, train_loader)
@@ -506,7 +431,6 @@ def main(args):
         print("best top1", max(total_acc_t1))
         print("top5", total_acc_t5)
         print("best top5", max(total_acc_t5))
-
 
 
 if __name__ == '__main__':
@@ -519,14 +443,12 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', '-e', type=int, default=300, help="epochs for scheduling")
     parser.add_argument('--max_epochs', type=int, default=300, help="epochs for actual training")
     parser.add_argument('--batch_size_per_gpu', '-b', type=int, default=256, help="batch size")
-    parser.add_argument('--num_workers', '-n', type=int, default=16, help='number of workers')
+    parser.add_argument('--num_workers', '-n', type=int, default=10, help='number of workers')
     parser.add_argument('--board_path', '-bp', default='./log', type=str, help='tensorboard path')
     parser.add_argument('--accumulate', default=1, type=int, help='accumulate gradient')
     parser.add_argument('--mlp_hidden', default=4096, type=int, help='mlp hidden dimension')
-    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of layer2output')
-    parser.add_argument('--up', default=12, type=int, help='layer2high skip layer')
-    parser.add_argument('--st_inter', default=False, type=bool, help='intermediate representation of student')
-    parser.add_argument('--t_inter', default=False, type=bool, help='intermediate representation of teacher')
+    parser.add_argument('--ratio', default=1, type=float, help='loss ratio of self-distillation')
+    parser.add_argument('--st_inter', default=False, type=bool, help='apply self-distillation')
 
     parser.add_argument('--data', '-d', metavar='DIR', default='../dataset',
                         help='path to dataset')
@@ -537,67 +459,36 @@ if __name__ == '__main__':
     parser.add_argument('--accelerator', default='ddp', type=str,
                         help='ddp for multi-gpu or node, ddp2 for across negative samples')
 
-    # # Multi-crop parameters
-    # parser.add_argument('--global_crops_scale', type=float, nargs='+', default=(0.4, 1.),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
-    #     recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    # parser.add_argument('--local_crops_number', type=int, default=8, help="""Number of small
-    #     local views to generate. Set this parameter to 0 to disable multi-crop training.
-    #     When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    # parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-    #                     help="""Scale range of the cropped image before resizing, relatively to the origin image.
-    #     Used for small local view cropping of multi-crop.""")
-
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
     parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
-            end of optimization. We use a cosine LR schedule with linear warmup.""")
-    # parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-    #     during which we keep the output layer fixed. Typically doing so during
-    #     the first epoch helps training. Try increasing this value if the loss does not decrease.""")
+                end of optimization. We use a cosine LR schedule with linear warmup.""")
     parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
-            weight decay. With ViT, a smaller value at the beginning of training works well.""")
+                weight decay. With ViT, a smaller value at the beginning of training works well.""")
     parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
-            weight decay. We use a cosine schedule for WD and using a larger decay by
-            the end of training improves performance for ViTs.""")
+                weight decay. We use a cosine schedule for WD and using a larger decay by
+                the end of training improves performance for ViTs.""")
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
-            gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
-            help optimization for larger ViT architectures. 0 for disabling.""")
-
-    # # Temperature teacher parameters
-    # parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
-    #                     help="""Initial value for the teacher temperature: 0.04 works well in most cases.
-    #     Try decreasing it if the training loss does not decrease.""")
-    # parser.add_argument('--teacher_temp', default=0.04, type=float, help="""Final value (after linear warmup)
-    #     of the teacher temperature. For most experiments, anything above 0.07 is unstable. We recommend
-    #     starting with the default value of 0.04 and increase this slightly if needed.""")
-    # parser.add_argument('--warmup_teacher_temp_epochs', default=0, type=int,
-    #                     help='Number of warmup epochs for the teacher temperature (Default: 30).')
-    # parser.add_argument('--norm_last_layer', default=True, type=utils.bool_flag,
-    #                     help="""Whether or not to weight normalize the last layer of the DINO head.
-    #     Not normalizing leads to better performance but can make the training unstable.
-    #     In our experiments, we typically set this paramater to False with vit_small and True with vit_base.""")
+                gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
+                help optimization for larger ViT architectures. 0 for disabling.""")
 
     # Model parameters
     parser.add_argument('--arch', default='vit_small', type=str,
                         choices=['vit_tiny', 'vit_small', 'vit_base', 'deit_base', 'deit_tiny',
                                  'deit_small'] + torchvision_archs,
                         help="""Name of architecture to train. For quick experiments with ViTs,
-                we recommend using vit_tiny or vit_small.""")
+                    we recommend using vit_tiny or vit_small.""")
     parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
-            of input square patches - default 16 (for 16x16 patches). Using smaller
-            values leads to better performance but requires more memory. Applies only
-            for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
-            mixed precision training (--use_fp16 false) to avoid unstabilities.""")
+                of input square patches - default 16 (for 16x16 patches). Using smaller
+                values leads to better performance but requires more memory. Applies only
+                for ViTs (vit_tiny, vit_small and vit_base). If <16, we recommend disabling
+                mixed precision training (--use_fp16 false) to avoid unstabilities.""")
     parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of
-            the DINO head output. For complex and large datasets large values (like 65k) work well.""")
-    parser.add_argument('--div', default=4, type=int, help="dividing hidden dimensions of mlp1")
+                the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--momentum_teacher', default=0.996, type=float, help="""Base EMA
-            parameter for teacher update. The value is increased to 1 during training with cosine schedule.
-            We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
-    parser.add_argument('--use_bn_in_head', default=False, type=utils.bool_flag,
-                        help="Whether to use batch normalizations in projection head (Default: False)")
+                parameter for teacher update. The value is increased to 1 during training with cosine schedule.
+                We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
+    parser.add_argument('--dis_token', default=False, type=utils.bool_flag, help="distillation token")
 
     hparam = parser.parse_args()
     if hparam.load_json:
