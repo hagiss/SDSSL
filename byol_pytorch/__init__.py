@@ -1,1 +1,1 @@
-from byol_pytorch.byol_pytorch import NetWrapper
+from byol_pytorch.byol_pytorch import NetWrapper, MLP
