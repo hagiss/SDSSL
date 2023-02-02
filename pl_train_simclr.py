@@ -539,6 +539,7 @@ if __name__ == '__main__':
             parameter for teacher update. The value is increased to 1 during training with cosine schedule.
             We recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256.""")
     parser.add_argument('--dis_token', default=False, type=utils.bool_flag, help="distillation token")
+    parser.add_argument('--temperature', default=0.07, type=float, help="""temperature for infoNCE loss""")
 
     hparam = parser.parse_args()
     if hparam.load_json:
