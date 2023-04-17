@@ -10,7 +10,7 @@
 
 ### Imagenet evaluation
 
-![img_2.png](img_2.png)
+<img width="1404" alt="image" src="https://user-images.githubusercontent.com/66506438/232485228-9b29bdd7-eec3-4d8f-ac41-bcbb04eb2c15.png">
 
 
 ## Environment
